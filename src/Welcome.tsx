@@ -252,9 +252,9 @@ export function Welcome() {
               ))}
           </div>
           <p className="site-capability-note">
-            An evolving product, with clear capabilities. Payments, automatic AI/media processing,
-            team access, and some integrations are not connected yet. Website monitoring pauses when
-            free hosting sleeps.
+            An evolving product, with clear capabilities. Payments require merchant activation.
+            Automatic AI/media processing, team access, and some integrations are not connected yet.
+            Website monitoring pauses when free hosting sleeps.
           </p>
         </section>
         <section className="site-last-call">

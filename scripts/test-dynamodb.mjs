@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 const processHandle = spawn(
   process.execPath,
-  ['--test', 'tests/api.test.mjs', 'tests/dynamodb.test.mjs'],
+  ['--test', 'tests/api.test.mjs', 'tests/dynamodb.test.mjs', 'tests/billing.test.mjs'],
   {
     stdio: 'inherit',
     env: {

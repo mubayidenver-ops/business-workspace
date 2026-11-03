@@ -514,6 +514,46 @@ test('changing password invalidates all existing sessions and preserves records'
     'Keep this',
   );
 });
+test('billing is private and disabled checkout cannot accept a payment claim', async () => {
+  assert.equal((await req('/billing')).status, 401);
+  const summary = await req('/billing', 'GET', undefined, cookieA);
+  assert.equal(summary.status, 200);
+  assert.equal(summary.data.mode, 'disabled');
+  assert.equal(summary.data.plan, 'free');
+  assert.deepEqual(summary.data.orders, []);
+  assert.equal(
+    (
+      await req(
+        '/billing/checkout',
+        'POST',
+        {
+          accepted: true,
+          requestKey: '00000000-0000-0000-0000-000000000000',
+          paid: true,
+          amount: 1,
+        },
+        cookieA,
+      )
+    ).status,
+    503,
+  );
+  assert.equal(
+    (await req('/billing/checkout', 'POST', {}, cookieA, 'https://evil.example')).status,
+    403,
+  );
+  assert.equal(
+    (await req('/billing/BW000000000000000000000000000000/check', 'POST', {}, cookieB)).status,
+    404,
+  );
+  const callback = await fetch(url + '/api/billing/paynow/callback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'status=Paid&amount=9.00',
+  });
+  assert.equal(callback.status, 503);
+  assert.equal((await req('/billing', 'GET', undefined, cookieA)).data.plan, 'free');
+});
+
 test('logout invalidates the server session', async () => {
   assert.equal((await req('/logout', 'POST', {}, cookieB)).status, 200);
   assert.equal((await req('/state', 'GET', undefined, cookieB)).status, 401);

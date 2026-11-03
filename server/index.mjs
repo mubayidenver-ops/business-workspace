@@ -7,9 +7,11 @@ import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
 import { safeFetch } from './network.mjs';
 import { assertShareable, publicProjection, clientResponse } from './public-sharing.mjs';
+import { Billing } from './billing.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const store = await createStore(root);
+const billing = new Billing(store);
 const json = (res, status, value, headers = {}) => {
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -181,6 +183,18 @@ const server = createServer(async (req, res) => {
     return;
   }
   try {
+    if (url.pathname === '/api/billing/paynow/callback' && req.method === 'POST') {
+      if (!req.headers['content-type']?.startsWith('application/x-www-form-urlencoded'))
+        throw fail(415, 'Use form encoding.');
+      let raw = '';
+      for await (const chunk of req) {
+        raw += chunk;
+        if (Buffer.byteLength(raw) > 64000) throw fail(413, 'Payment message is too large.');
+      }
+      await billing.callback(raw);
+      json(res, 200, { received: true });
+      return;
+    }
     if (!['GET', 'HEAD'].includes(req.method)) {
       const expected =
         process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || `http://${req.headers.host}`;
@@ -313,6 +327,35 @@ const server = createServer(async (req, res) => {
       });
       return;
     }
+    if (url.pathname === '/api/billing' && req.method === 'GET') {
+      json(res, 200, await billing.summary(user.id));
+      return;
+    }
+    if (url.pathname === '/api/billing/checkout' && req.method === 'POST') {
+      rate('billing:' + user.id, 10);
+      json(res, 200, await billing.checkout(user, await body(req)));
+      return;
+    }
+    const paymentMatch = /^\/api\/billing\/([A-Za-z0-9]{32})\/(check|resume)$/.exec(url.pathname);
+    if (paymentMatch && req.method === 'POST') {
+      rate('billing-check:' + user.id, 30);
+      if (paymentMatch[2] === 'check')
+        json(res, 200, await billing.reconcile(paymentMatch[1], user.id));
+      else {
+        const order = await store.getPayment(paymentMatch[1]);
+        if (!order || order.userId !== user.id) throw fail(404, 'Purchase not found.');
+        if (
+          !order.browserURL ||
+          !['created', 'sent'].includes(order.status) ||
+          order.mode !== billing.config.mode ||
+          order.integrationId !== billing.config.id
+        )
+          throw fail(409, 'This checkout is no longer available.');
+        const { paynowURL } = await import('./paynow.mjs');
+        json(res, 200, { url: paynowURL(order.browserURL, 'browser') });
+      }
+      return;
+    }
     if (url.pathname === '/api/records' && req.method === 'POST') {
       const b = await body(req);
       let record;
@@ -349,6 +392,7 @@ const server = createServer(async (req, res) => {
           return;
         }
         if (req.method === 'POST') {
+          await billing.requirePro(user.id);
           const b = await body(req);
           assertShareable(r);
           if (b.confirmed !== true)
@@ -377,6 +421,7 @@ const server = createServer(async (req, res) => {
         }
       }
       if (match[2] === 'convert' && req.method === 'POST') {
+        await billing.requirePro(user.id);
         if (r.module !== 'proposals') throw fail(400, 'Only proposals can become invoice drafts.');
         const b = await body(req);
         if (b.version !== r.version) throw fail(409, 'This proposal changed. Refresh it first.');

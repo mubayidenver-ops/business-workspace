@@ -4,12 +4,12 @@
 
 International freelancers and agencies. English interface with browser-local dates/numbers and local time-zone bookings. Accessibility target WCAG 2.2 AA; independent certification is not claimed.
 
-| Domain                                       | Source                                      | Reviewed   |
-| -------------------------------------------- | ------------------------------------------- | ---------- |
-| Intended product and delivery sequence       | docs/design.md, approved in chat            | 2026-11-03 |
-| Access, retention and development boundaries | docs/release-status.md                      | 2026-11-03 |
-| Field validation and booking lifecycle       | server/validation.mjs and server/index.mjs  | 2026-11-03 |
-| Billing and integration state                | shared/tools.mjs and docs/release-status.md | 2026-11-03 |
+| Domain                                       | Source                                     | Reviewed   |
+| -------------------------------------------- | ------------------------------------------ | ---------- |
+| Intended product and delivery sequence       | docs/design.md, approved in chat           | 2026-11-03 |
+| Access, retention and development boundaries | docs/release-status.md                     | 2026-11-03 |
+| Field validation and booking lifecycle       | server/validation.mjs and server/index.mjs | 2026-11-03 |
+| Billing and integration state                | server/billing.mjs and docs/billing.md     | 2026-11-03 |
 
 Visual context: DESIGN.md. Runtime token source: src/styles.css. Light theme only. Native date and select OS popup geometry/language are intentionally accepted in this initial English release.
 
@@ -58,3 +58,7 @@ Named page titles, skip-to-content, text breadcrumbs, back-to-group controls, an
 ## Verification
 
 Run npm test, npm run build, and the premium static audit. Browser coverage should include authentication, create/edit/archive/restore, invalid inputs, search/no-results/clear, CSV, narrow layout and keyboard dialog closure. Compare onboarding and proposals as sibling record workflows. Tests and verification reports document actual results; missing browser checks are release risks rather than inferred passes.
+
+## Billing workflow
+
+BillingPanel owns the plan and purchase-history interface, reusing Modal and existing button/table tokens. Server-side billing and the payment ledger determine plan, price, access expiry and status. Checkout requires explicit acknowledgement of US$9 for 30 days without automatic renewal. Disabled, test, live, pending, failed, paid, expired, disputed and refunded states must remain distinct. Hosted payment redirects are restricted to Paynow. Error recovery preserves the request key; retries do not silently create another purchase. No card fields or provider secrets appear in the workspace. Details: docs/billing.md.

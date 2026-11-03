@@ -434,6 +434,74 @@ export class DynamoStore {
       };
     });
   }
+  async payments(userId) {
+    return (await this.query(workspace(userId), 'PAYMENT#')).map(omitKeys);
+  }
+  async getPayment(reference) {
+    return omitKeys(await this.get(`PAYMENT#${reference}`, 'ORDER'));
+  }
+  async createPayment(order) {
+    try {
+      await this.doc.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: this.table,
+                Item: { pk: `PAYMENT#${order.reference}`, sk: 'ORDER', ...order },
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            },
+            {
+              Put: {
+                TableName: this.table,
+                Item: { pk: workspace(order.userId), sk: `PAYMENT#${order.reference}`, ...order },
+              },
+            },
+          ],
+        }),
+      );
+      return { created: true, order };
+    } catch (e) {
+      if (!collision(e)) throw e;
+      const existing = await this.getPayment(order.reference);
+      if (!existing) throw storageError(409, 'Purchase is being created. Try again.');
+      return { created: false, order: existing };
+    }
+  }
+  async updatePayment(reference, version, patch) {
+    const current = await this.getPayment(reference);
+    if (!current || current.version !== version)
+      throw storageError(409, 'Purchase changed. Check its status again.');
+    const next = { ...current, ...patch, version: version + 1 };
+    try {
+      await this.doc.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: this.table,
+                Item: { pk: `PAYMENT#${reference}`, sk: 'ORDER', ...next },
+                ConditionExpression: '#v = :v',
+                ExpressionAttributeNames: { '#v': 'version' },
+                ExpressionAttributeValues: { ':v': version },
+              },
+            },
+            {
+              Put: {
+                TableName: this.table,
+                Item: { pk: workspace(current.userId), sk: `PAYMENT#${reference}`, ...next },
+              },
+            },
+          ],
+        }),
+      );
+      return next;
+    } catch (e) {
+      if (collision(e)) throw storageError(409, 'Purchase changed. Check its status again.');
+      throw e;
+    }
+  }
   async cleanup() {
     /* DynamoDB TTL removes expired sessions and history once enabled. */
   }

@@ -1,5 +1,9 @@
 # Development release
 
+## Paynow billing integration — 2026-11-03
+
+Authenticated billing, hosted checkout integration, signed callbacks, payment history and 30-day Pro entitlements are implemented. Payments remain disabled because merchant setup and live provider tests are unfinished. This is prepaid access, without automatic renewals. See [billing setup and precise boundaries](billing.md). This supersedes earlier statements that no billing code exists.
+
 ## Professional workflow update — 2026-11-03
 
 The new landing page, itemised documents, proposal-to-invoice conversion, revocable client links, client responses, dashboard summaries and password changes are implemented. See [delivered features and limits](pro-upgrade.md). This update supersedes the historical initial-release list below for those capabilities. Billing remains disabled pending a merchant payment provider.

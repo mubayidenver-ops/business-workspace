@@ -20,6 +20,7 @@ import { DocumentView } from './FinancialEditor';
 import { Welcome } from './Welcome';
 import { BusinessInsights } from './BusinessInsights';
 import { PasswordModal } from './PasswordModal';
+import { BillingPanel } from './BillingPanel';
 import './styles.css';
 import './pro.css';
 const tools = registry as Tool[];
@@ -224,7 +225,9 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
           </p>
           <div className="auth-note">
             <Icons.LockKeyhole size={17} />
-            <span>No credit card needed. Paid services are not enabled in this release.</span>
+            <span>
+              No credit card needed for a free workspace. Manage optional Pro access in Billing.
+            </span>
           </div>
           <DesignerCredit />
         </div>
@@ -239,7 +242,7 @@ function App() {
     [initial, setInitial] = useState(true),
     [loadError, setLoadError] = useState('');
   const [params, setParams] = useState(() => new URLSearchParams(location.search));
-  const view = params.get('view') || 'overview',
+  const view = params.get('view') === 'billing' ? 'overview' : params.get('view') || 'overview',
     category = params.get('group') || 'All tools',
     query = params.get('q') || '';
   const [mobile, setMobile] = useState(false),
@@ -1252,7 +1255,11 @@ function App() {
               </div>
               <div>
                 <dt>Billing</dt>
-                <dd>Not connected · no charges</dd>
+                <dd>
+                  <button className="link-button" onClick={() => setPanel('billing')}>
+                    View plan & billing
+                  </button>
+                </dd>
               </div>
               <div>
                 <dt>Time zone</dt>
@@ -1327,7 +1334,7 @@ function App() {
               <div>
                 <h3>Still to connect</h3>
                 <ul>
-                  <li>Payments and subscription billing</li>
+                  <li>Paynow merchant activation, provider testing and automatic renewals</li>
                   <li>Automatic transcription, translation and AI</li>
                   <li>Video rendering and private uploads</li>
                   <li>Full client portals, storefront checkout and public booking calendars</li>
@@ -1337,8 +1344,8 @@ function App() {
               </div>
             </div>
             <p className="notice">
-              This is a development release. Do not use it to collect customer payments or treat it
-              as a launched production service.
+              Payment collection remains disabled until merchant activation and provider testing are
+              complete. Automatic renewals are not included.
             </p>
           </div>
         </Modal>
@@ -1389,6 +1396,14 @@ function App() {
             )}
           </div>
         </Modal>
+      )}
+      {(panel === 'billing' || (!panel && params.get('view') === 'billing')) && (
+        <BillingPanel
+          onClose={() => {
+            setPanel('');
+            navigate('overview');
+          }}
+        />
       )}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
       {print && (

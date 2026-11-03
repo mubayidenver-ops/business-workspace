@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS checks(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFE
 CREATE TABLE IF NOT EXISTS votes(record_id TEXT NOT NULL REFERENCES records(id),user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(record_id,user_id));
 CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL REFERENCES users(id),key TEXT NOT NULL,hash TEXT NOT NULL,record_id TEXT NOT NULL REFERENCES records(id),PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS shares(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,record_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS payments(reference TEXT PRIMARY KEY,user_id TEXT NOT NULL,version INTEGER NOT NULL,payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
   async health() {
@@ -216,6 +217,33 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       this.db.exec('ROLLBACK');
       throw e;
     }
+  }
+  async payments(userId) {
+    return this.db
+      .prepare('SELECT payload FROM payments WHERE user_id=?')
+      .all(userId)
+      .map((r) => JSON.parse(r.payload));
+  }
+  async getPayment(reference) {
+    const row = this.db.prepare('SELECT payload FROM payments WHERE reference=?').get(reference);
+    return row ? JSON.parse(row.payload) : null;
+  }
+  async createPayment(order) {
+    const result = this.db
+      .prepare('INSERT OR IGNORE INTO payments VALUES(?,?,?,?)')
+      .run(order.reference, order.userId, order.version, JSON.stringify(order));
+    return { created: result.changes === 1, order: await this.getPayment(order.reference) };
+  }
+  async updatePayment(reference, version, patch) {
+    const current = await this.getPayment(reference);
+    if (!current || current.version !== version)
+      throw storageError(409, 'Purchase changed. Check its status again.');
+    const next = { ...current, ...patch, version: version + 1 };
+    const saved = this.db
+      .prepare('UPDATE payments SET version=?,payload=? WHERE reference=? AND version=?')
+      .run(next.version, JSON.stringify(next), reference, version);
+    if (!saved.changes) throw storageError(409, 'Purchase changed. Check its status again.');
+    return next;
   }
   async cleanup() {
     this.db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());

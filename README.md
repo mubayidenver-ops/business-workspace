@@ -8,6 +8,8 @@ A connected workbench for independent businesses, with 30 module workspaces for 
 
 ## Run locally
 
+**Billing integration:** Paynow hosted purchases now support 30-day Pro access, signed confirmations and private purchase history. Payments stay disabled until merchant setup and provider testing are complete. See [billing activation and limits](docs/billing.md). Automatic recurring debits are not enabled.
+
 **DynamoDB cloud storage is now supported.** The hosting configuration targets your `bussiness-workspace` table in `eu-north-1`, with no paid disk. Configure server-side AWS access before deployment; see [DynamoDB setup and limitations](docs/dynamodb.md). The local defaults below preserve existing SQLite data.
 
 Requires Node.js 24 or newer and npm.
