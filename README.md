@@ -8,7 +8,7 @@ A connected workbench for independent businesses, with 30 module workspaces for 
 
 ## Run locally
 
-**DynamoDB cloud storage is now supported.** The hosting configuration targets your `business-workspace` table in `eu-north-1`, with no paid disk. Configure server-side AWS access before deployment; see [DynamoDB setup and limitations](docs/dynamodb.md). The local defaults below preserve existing SQLite data.
+**DynamoDB cloud storage is now supported.** The hosting configuration targets your `bussiness-workspace` table in `eu-north-1`, with no paid disk. Configure server-side AWS access before deployment; see [DynamoDB setup and limitations](docs/dynamodb.md). The local defaults below preserve existing SQLite data.
 
 Requires Node.js 24 or newer and npm.
 
@@ -32,7 +32,7 @@ For live development, use `npm run dev`. `npm test` runs API, isolation, validat
 | APP_URL              | request origin | Exact trusted public origin, e.g. https://workspace.example.com |
 | COOKIE_SECURE        | false          | Set true behind HTTPS in production                             |
 
-Cloud storage additionally uses `STORAGE_BACKEND=dynamodb`, `AWS_REGION=eu-north-1`, and `DYNAMODB_TABLE=business-workspace`, plus secure server-side AWS authentication. No code here enables payment collection. Website checks allow public IPv4 HTTP/HTTPS on standard ports and limit response sizes and redirects. SQLite retains 30 checks per record; DynamoDB uses seven-day TTL history and shows the latest 200 checks per workspace. Timers stop when the server stops or the hosting service sleeps.
+Cloud storage additionally uses `STORAGE_BACKEND=dynamodb`, `AWS_REGION=eu-north-1`, and `DYNAMODB_TABLE=bussiness-workspace`, plus secure server-side AWS authentication. No code here enables payment collection. Website checks allow public IPv4 HTTP/HTTPS on standard ports and limit response sizes and redirects. SQLite retains 30 checks per record; DynamoDB uses seven-day TTL history and shows the latest 200 checks per workspace. Timers stop when the server stops or the hosting service sleeps.
 
 ## Structure
 

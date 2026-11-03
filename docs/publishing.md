@@ -5,7 +5,7 @@ Deployment configuration is prepared in render.yaml. No cloud service has been c
 ## Proposed deployment
 
 - Render web service: business-workspace-lordyvites, deploying main from the GitHub repository.
-- Node 24.22.1, a single Free instance and the existing DynamoDB table `business-workspace` in `eu-north-1`. No persistent Render disk.
+- Node 24.22.1, a single Free instance and the existing DynamoDB table `bussiness-workspace` in `eu-north-1`. No persistent Render disk.
 - HTTPS with secure session cookies. Render's documented RENDER_EXTERNAL_URL supplies the trusted origin; set APP_URL separately if using a custom domain.
 - Public readiness check at /api/health verifies the database can respond without revealing account data.
 - Build: npm ci --include=dev && npm run build. Start: node server/index.mjs.

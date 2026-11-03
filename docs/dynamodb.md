@@ -1,13 +1,13 @@
 # DynamoDB storage
 
-The app supports the existing `business-workspace` table in `eu-north-1`, using String partition key `pk` and String sort key `sk`. No secondary indexes are needed. The app does not create tables or change billing settings. Keep Standard table class, provisioned 5 read / 5 write units, and auto scaling off if targeting the free allowance. Other account usage, optional features and account eligibility can affect costs; this is not a guarantee of a zero bill.
+The app supports the existing `bussiness-workspace` table in `eu-north-1`, using String partition key `pk` and String sort key `sk`. No secondary indexes are needed. The app does not create tables or change billing settings. Keep Standard table class, provisioned 5 read / 5 write units, and auto scaling off if targeting the free allowance. Other account usage, optional features and account eligibility can affect costs; this is not a guarantee of a zero bill.
 
 ## Server configuration
 
 ```text
 STORAGE_BACKEND=dynamodb
 AWS_REGION=eu-north-1
-DYNAMODB_TABLE=business-workspace
+DYNAMODB_TABLE=bussiness-workspace
 ```
 
 The AWS SDK uses its default server-side credential provider chain. Prefer an AWS IAM role/short-lived credentials on a compatible AWS host. On an external host, configure a dedicated identity restricted to this table. `aws/dynamodb-policy.json` is a policy template; replace YOUR_AWS_ACCOUNT_ID with the account containing the table. It permits only the data operations used by the app, not table creation, scans or billing changes.

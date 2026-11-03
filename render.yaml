@@ -19,7 +19,7 @@ services:
       - key: AWS_REGION
         value: eu-north-1
       - key: DYNAMODB_TABLE
-        value: business-workspace
+        value: bussiness-workspace
       - key: AWS_ACCESS_KEY_ID
         sync: false
       - key: AWS_SECRET_ACCESS_KEY

@@ -25,7 +25,7 @@ const collision = (e) =>
     ));
 export class DynamoStore {
   constructor({
-    table = process.env.DYNAMODB_TABLE || 'business-workspace',
+    table = process.env.DYNAMODB_TABLE || 'bussiness-workspace',
     region = process.env.AWS_REGION || 'eu-north-1',
     endpoint = process.env.DYNAMODB_ENDPOINT,
   } = {}) {

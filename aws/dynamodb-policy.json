@@ -11,7 +11,7 @@
         "dynamodb:DeleteItem",
         "dynamodb:Query"
       ],
-      "Resource": "arn:aws:dynamodb:eu-north-1:YOUR_AWS_ACCOUNT_ID:table/business-workspace"
+      "Resource": "arn:aws:dynamodb:eu-north-1:YOUR_AWS_ACCOUNT_ID:table/bussiness-workspace"
     }
   ]
 }
