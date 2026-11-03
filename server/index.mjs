@@ -156,6 +156,15 @@ const server = createServer(async (req, res) => {
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'DENY');
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/api/health' && req.method === 'GET') {
+    try {
+      db.prepare('SELECT 1').get();
+      json(res, 200, { status: 'ready' });
+    } catch {
+      json(res, 503, { status: 'unavailable' });
+    }
+    return;
+  }
   if (!url.pathname.startsWith('/api/')) {
     if (vite) {
       vite.middlewares(req, res, () => {
@@ -199,7 +208,8 @@ const server = createServer(async (req, res) => {
   }
   try {
     if (!['GET', 'HEAD'].includes(req.method)) {
-      const expected = process.env.APP_URL || `http://${req.headers.host}`;
+      const expected =
+        process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || `http://${req.headers.host}`;
       if (req.headers.origin && req.headers.origin !== expected)
         throw fail(403, 'This request came from a different website.');
       if (!req.headers['content-type']?.startsWith('application/json'))

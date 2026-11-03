@@ -56,6 +56,12 @@ async function req(path, method = 'GET', data, cookie, origin) {
     cookie: response.headers.get('set-cookie')?.split(';')[0],
   };
 }
+test('public readiness check does not expose workspace data', async () => {
+  const response = await req('/health');
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.data, { status: 'ready' });
+});
+
 test('unauthenticated data is blocked and two distinct accounts can sign up', async () => {
   assert.equal((await req('/state')).status, 401);
   const a = await req('/auth', 'POST', {
