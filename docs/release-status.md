@@ -1,0 +1,32 @@
+# Development release 0.1
+
+This is a runnable first development release, not a launched paid service. All 30 tools have module-specific record management. The complete original scope remains in docs/design.md; a saved record screen does not imply every service is finished.
+
+## Implemented
+
+- Account registration/sign-in, hashed passwords, hashed cookie sessions, rate-limited authentication and same-origin mutation checks.
+- One private workspace per account, persistence in SQLite, owner-scoped queries, validated fields and optimistic version checks.
+- All 30 module record screens: create, edit, search, pagination, archive, restore and CSV export.
+- Invoice balance and project profit calculations; quotation amounts and printable records.
+- Appointment conflict prevention; due-date notifications displayed in-app.
+- Feedback votes limited to one per signed-in workspace account (team voting requires team access later).
+- CSV parsing with quoted cells and multiline fields, trim/deduplicate, inconsistent-column warnings and formula-safe export.
+- PDF merge and page extraction; PNG/JPG/WebP input with proportional PNG/JPG resize output.
+- SRT editing and SRT/WebVTT export, local content templates, quiz creation/session scoring/JSON export and three English hospitality exercises.
+- On-demand bounded website checks, 20-link scans, page hashes and certificate inspection. Public IPv4 only; unsafe destinations and redirect targets are blocked. Active uptime/change monitors run in-process while the server is running (up to 50 global monitors, development limit). No availability SLA or durable worker queue.
+- Manual licence/domain/equipment renewal records, brand asset links, video clip plans, episode transcripts, internal articles, product and portfolio records.
+
+## Not implemented / not connected
+
+- Subscriptions, checkout, refunds and verified paid download fulfilment. The app cannot collect revenue yet.
+- Email/SMS delivery, calendar integrations, automatic transcription/translation, AI generation and video rendering.
+- Client-facing approvals, public onboarding/booking pages, hosted portfolios, public help centre, storefront and external podcast publishing.
+- File uploads/private object storage, team memberships/invitations/roles, password reset/email verification, two-factor authentication and account deletion workflow.
+- PostgreSQL and durable distributed jobs. The approved production architecture is documented; SQLite and an in-process scheduler are a deliberate development bootstrap.
+- Complete curriculum, multiple language support, XLSX imports, advanced quotation line items and time-entry accounting.
+
+## Data lifecycle and production boundary
+
+Accounts see only their own records and checks. Archive is reversible indefinitely while the local database exists. There is no permanent deletion UI; server administrators manage the development database. Backups include private business data and must be stored safely. Files processed by utilities are not uploaded to the server. The server database and authentication cookies must never be committed.
+
+Use local test data first. Before public launch: deploy HTTPS, enable secure cookies, set APP_URL, add account recovery/deletion, strengthen production abuse limits, implement team permissions if needed, migrate persistence and workers as required, establish backups and privacy/retention terms, configure and test real providers, and obtain appropriate security/commerce review. These are launch dependencies, not a claim of compliance.
