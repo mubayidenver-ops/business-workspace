@@ -125,6 +125,46 @@ test(
       assert.equal(await store.getRecord(second.id, r.id), null);
       assert.equal((await store.latestCheck(user.id, r.id)).result.status, 200);
     });
+    await t.test('shared links expire and concurrent responses cannot both commit', async () => {
+      const record = (
+        await store.createRecord(
+          user.id,
+          'approvals',
+          {
+            title: 'Review',
+            status: 'In review',
+            data: { client: 'Client', notes: 'Review this' },
+          },
+          null,
+          'review',
+        )
+      ).record;
+      const expired = {
+        hash: 'expired-share',
+        user_id: user.id,
+        record_id: record.id,
+        recordVersion: record.version,
+        brand: 'Owner',
+        expires: Date.now() - 1000,
+      };
+      await store.createShare(user.id, record.id, record.version, expired);
+      assert.equal(await store.getShare(expired.hash), null);
+      const share = { ...expired, hash: 'active-share', expires: Date.now() + 60000 };
+      await store.createShare(user.id, record.id, record.version, share);
+      const answers = await Promise.allSettled([
+        store.respondToShare(share.hash, record.version, {
+          status: 'Completed',
+          data: record.data,
+        }),
+        store.respondToShare(share.hash, record.version, {
+          status: 'In review',
+          data: record.data,
+        }),
+      ]);
+      assert.equal(answers.filter((r) => r.status === 'fulfilled').length, 1);
+      assert.ok([409, 410].includes(answers.find((r) => r.status === 'rejected').reason.status));
+      assert.equal(await store.getShare(share.hash), null);
+    });
     await t.test('queries read every page without scans', async () => {
       const shortLimit = await store.query('WORKSPACE#' + user.id, 'RECORD#', { limit: 2 });
       assert.equal(shortLimit.length, 2);

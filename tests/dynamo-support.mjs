@@ -9,7 +9,7 @@ export async function localDynamoFixture() {
     endpoint,
     region: 'eu-north-1',
     maxAttempts: 1,
-    requestHandler: { connectionTimeout: 2000, requestTimeout: 5000 },
+    requestHandler: { connectionTimeout: 2000, requestTimeout: 10000, throwOnRequestTimeout: true },
     credentials: { accessKeyId: 'localtest', secretAccessKey: 'localtest' },
   });
   await client.send(

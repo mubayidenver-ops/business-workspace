@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REF
 CREATE TABLE IF NOT EXISTS checks(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),record_id TEXT NOT NULL REFERENCES records(id) ON DELETE CASCADE,created TEXT NOT NULL,result TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS votes(record_id TEXT NOT NULL REFERENCES records(id),user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(record_id,user_id));
 CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL REFERENCES users(id),key TEXT NOT NULL,hash TEXT NOT NULL,record_id TEXT NOT NULL REFERENCES records(id),PRIMARY KEY(user_id,key));
+CREATE TABLE IF NOT EXISTS shares(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,record_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
   async health() {
@@ -47,6 +48,25 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
   async deleteSession(token) {
     this.db.prepare('DELETE FROM sessions WHERE token=?').run(token);
+  }
+  async changePassword(email, expectedHash, password) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const user = this.db
+        .prepare('SELECT id FROM users WHERE email=? AND password=?')
+        .get(email, expectedHash);
+      if (!user)
+        throw storageError(
+          409,
+          'Your account changed. Sign in again before changing the password.',
+        );
+      this.db.prepare('UPDATE users SET password=? WHERE id=?').run(password, user.id);
+      this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
   }
   records(userId) {
     return this.db
@@ -143,6 +163,59 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
         "SELECT * FROM records WHERE archived=0 AND status='Active' AND module IN ('uptime','changes') LIMIT 50",
       )
       .all();
+  }
+  async createShare(userId, id, version, share) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const record = this.records(userId).find((r) => r.id === id);
+      if (!record || record.version !== version)
+        throw storageError(409, 'The record changed. Refresh before sharing.');
+      this.db.prepare('DELETE FROM shares WHERE user_id=? AND record_id=?').run(userId, id);
+      this.db
+        .prepare('INSERT INTO shares VALUES(?,?,?,?)')
+        .run(share.hash, userId, id, JSON.stringify(share));
+      this.db.exec('COMMIT');
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+  async shareForRecord(userId, id) {
+    const s = this.db
+      .prepare('SELECT payload FROM shares WHERE user_id=? AND record_id=?')
+      .get(userId, id);
+    return s ? JSON.parse(s.payload) : null;
+  }
+  async getShare(hash) {
+    const s = this.db.prepare('SELECT payload FROM shares WHERE hash=?').get(hash);
+    const share = s ? JSON.parse(s.payload) : null;
+    return share && share.expires > Date.now() ? share : null;
+  }
+  async revokeShare(userId, id) {
+    this.db.prepare('DELETE FROM shares WHERE user_id=? AND record_id=?').run(userId, id);
+  }
+  async respondToShare(hash, version, patch) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db.prepare('SELECT payload FROM shares WHERE hash=?').get(hash);
+      const share = row ? JSON.parse(row.payload) : null;
+      if (!share || share.expires <= Date.now())
+        throw storageError(410, 'This link is no longer available.');
+      if (share.recordVersion !== version)
+        throw storageError(409, 'This document changed. Request a new link.');
+      const r = changeRecord(this.records(share.user_id), share.record_id, version, patch);
+      this.db
+        .prepare(
+          'UPDATE records SET title=?,status=?,data=?,version=?,updated=? WHERE id=? AND user_id=?',
+        )
+        .run(r.title, r.status, r.data, r.version, r.updated, r.id, share.user_id);
+      this.db.prepare('DELETE FROM shares WHERE hash=?').run(hash);
+      this.db.exec('COMMIT');
+      return r;
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
   }
   async cleanup() {
     this.db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());

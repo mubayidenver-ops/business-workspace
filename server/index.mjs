@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
 import { safeFetch } from './network.mjs';
+import { assertShareable, publicProjection, clientResponse } from './public-sharing.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const store = await createStore(root);
@@ -168,6 +169,8 @@ const server = createServer(async (req, res) => {
           '.css': 'text/css',
           '.svg': 'image/svg+xml',
           '.json': 'application/json',
+          '.xml': 'application/xml',
+          '.txt': 'text/plain; charset=utf-8',
         }[extname(path)] || 'application/octet-stream',
       );
       res.end(readFileSync(path));
@@ -229,8 +232,65 @@ const server = createServer(async (req, res) => {
       );
       return;
     }
+    if (url.pathname === '/api/public') {
+      const token = req.headers['x-workspace-share'];
+      if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token))
+        throw fail(410, 'This link is no longer available. Ask its owner for a new link.');
+      const hash = sessionHash(token);
+      rate('public:' + hash, 120);
+      const share = await store.getShare(hash);
+      if (!share)
+        throw fail(410, 'This link has expired, was revoked, or has already received a response.');
+      const record = await store.getRecord(share.user_id, share.record_id);
+      if (!record || record.archived || record.version !== share.recordVersion)
+        throw fail(410, 'The owner updated this document. Ask for a new link.');
+      if (req.method === 'GET') {
+        const last =
+          record.module === 'uptime' ? await store.latestCheck(share.user_id, record.id) : null;
+        json(res, 200, publicProjection(record, share, last));
+        return;
+      }
+      if (req.method === 'POST') {
+        const input = await body(req);
+        if (input.version !== record.version)
+          throw fail(409, 'This document changed. Reload before responding.');
+        const response = clientResponse(record, input);
+        const data = { ...JSON.parse(record.data), clientResponse: JSON.stringify(response) };
+        await store.respondToShare(hash, record.version, {
+          data: JSON.stringify(data),
+          status: response.action === 'approve' ? 'Completed' : 'In review',
+        });
+        json(res, 200, { received: true, action: response.action });
+        return;
+      }
+      throw fail(405, 'This action is not available.');
+    }
     const user = await userFor(req);
     if (!user) throw fail(401, 'Sign in to open your workspace.');
+    if (url.pathname === '/api/password' && req.method === 'POST') {
+      rate('password:' + user.id, 10);
+      const b = await body(req);
+      const current = String(b.currentPassword || ''),
+        next = String(b.newPassword || '');
+      if (current.length < 10 || current.length > 128 || next.length < 10 || next.length > 128)
+        throw fail(400, 'Use a password of 10–128 characters.');
+      if (current === next)
+        throw fail(400, 'Choose a new password that differs from the current one.');
+      const profile = await store.userByEmail(user.email),
+        [oldSalt, oldHash] = profile.password.split(':');
+      if (!timingSafeEqual(scryptSync(current, oldSalt, 64), Buffer.from(oldHash, 'hex')))
+        throw fail(400, 'The current password is incorrect.');
+      const salt = randomBytes(16).toString('hex'),
+        password = salt + ':' + scryptSync(next, salt, 64).toString('hex');
+      await store.changePassword(user.email, profile.password, password);
+      json(
+        res,
+        200,
+        { changed: true },
+        { 'Set-Cookie': 'bw_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' },
+      );
+      return;
+    }
     if (url.pathname === '/api/logout' && req.method === 'POST') {
       const token = /\bbw_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
       await store.deleteSession(sessionHash(token));
@@ -272,9 +332,79 @@ const server = createServer(async (req, res) => {
       json(res, saved.replayed ? 200 : 201, toRecord(saved.record));
       return;
     }
-    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote))?$/.exec(url.pathname);
+    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert))?$/.exec(url.pathname);
     if (match) {
       const r = await own(user, match[1]);
+      if (match[2] === 'share') {
+        if (req.method === 'GET') {
+          const share = await store.shareForRecord(user.id, r.id);
+          json(res, 200, {
+            active:
+              !!share &&
+              share.expires > Date.now() &&
+              share.recordVersion === r.version &&
+              !r.archived,
+            expires: share?.expires,
+          });
+          return;
+        }
+        if (req.method === 'POST') {
+          const b = await body(req);
+          assertShareable(r);
+          if (b.confirmed !== true)
+            throw fail(400, 'Confirm that this document may be shared before creating a link.');
+          if (b.version !== r.version)
+            throw fail(409, 'This record changed. Refresh before sharing.');
+          const days = Number(b.days ?? 7);
+          if (![1, 7, 30].includes(days)) throw fail(400, 'Choose a supported link expiry.');
+          const token = randomBytes(32).toString('hex'),
+            expires = Date.now() + days * 86400000;
+          await store.createShare(user.id, r.id, r.version, {
+            hash: sessionHash(token),
+            user_id: user.id,
+            record_id: r.id,
+            brand: user.name,
+            recordVersion: r.version,
+            expires,
+          });
+          json(res, 201, { token, expires });
+          return;
+        }
+        if (req.method === 'DELETE') {
+          await store.revokeShare(user.id, r.id);
+          json(res, 200, { revoked: true });
+          return;
+        }
+      }
+      if (match[2] === 'convert' && req.method === 'POST') {
+        if (r.module !== 'proposals') throw fail(400, 'Only proposals can become invoice drafts.');
+        const b = await body(req);
+        if (b.version !== r.version) throw fail(409, 'This proposal changed. Refresh it first.');
+        const source = JSON.parse(r.data);
+        let record;
+        try {
+          record = validateRecord('invoices', {
+            title: r.title + ' — invoice',
+            status: 'Draft',
+            data: { ...source, paid: '0', due: '' },
+          });
+        } catch (e) {
+          throw fail(400, e.message);
+        }
+        const key =
+          typeof b.requestKey === 'string' && /^[a-f0-9-]{36}$/.test(b.requestKey)
+            ? b.requestKey
+            : null;
+        const saved = await store.createRecord(
+          user.id,
+          'invoices',
+          record,
+          key,
+          sessionHash(`invoice:${r.id}:${r.version}`),
+        );
+        json(res, saved.replayed ? 200 : 201, toRecord(saved.record));
+        return;
+      }
       if (match[2] === 'check' && req.method === 'POST') {
         if (!['uptime', 'links', 'changes', 'expiry'].includes(r.module))
           throw fail(400, 'This tool does not run website checks.');
@@ -305,6 +435,8 @@ const server = createServer(async (req, res) => {
           } catch (e) {
             throw fail(400, e.message);
           }
+          const existing = JSON.parse(r.data);
+          if (existing.clientResponse) record.data.clientResponse = existing.clientResponse;
           patch = { title: record.title, status: record.status, data: JSON.stringify(record.data) };
         }
         const updated = await store.updateRecord(user.id, r.id, b.version, patch);

@@ -15,7 +15,13 @@ import { api, date, download, money, today } from './lib';
 import { Empty, Modal, RecordEditor, SearchBox } from './ui';
 import { Workbench } from './Workbench';
 import { DesignerCredit } from './DesignerCredit';
+import { ShareModal, PublicPage, canShare } from './Sharing';
+import { DocumentView } from './FinancialEditor';
+import { Welcome } from './Welcome';
+import { BusinessInsights } from './BusinessInsights';
+import { PasswordModal } from './PasswordModal';
 import './styles.css';
+import './pro.css';
 const tools = registry as Tool[];
 const icons: Record<
   string,
@@ -72,7 +78,9 @@ const groupIcons: Record<string, string> = {
 const getTool = (id: string) => tools.find((t) => t.id === id)!;
 type State = { user: User; records: Item[]; checks: Check[]; storage?: string };
 function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
-  const [mode, setMode] = useState('register'),
+  const [mode, setMode] = useState(
+      new URLSearchParams(location.search).get('auth') === 'login' ? 'login' : 'register',
+    ),
     [name, setName] = useState(''),
     [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
@@ -229,6 +237,8 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
   );
 }
 function App() {
+  const [sharing, setSharing] = useState<Item | null>(null);
+  const [converting, setConverting] = useState('');
   const [state, setState] = useState<State | null>(null),
     [initial, setInitial] = useState(true),
     [loadError, setLoadError] = useState('');
@@ -284,10 +294,13 @@ function App() {
     setPage(1);
     setRecordQuery('');
     setShowArchived(false);
-    document.title =
-      (getTool(view)?.name || (view === 'tools' ? 'All tools' : 'Overview')) +
-      ' · Business Workspace';
-  }, [view]);
+    document.title = state
+      ? (getTool(view)?.name || (view === 'tools' ? 'All tools' : 'Overview')) +
+        ' · Business Workspace'
+      : params.has('auth')
+        ? 'Open your workspace · Business Workspace'
+        : 'Business Workspace — client work, all together';
+  }, [view, !!state]);
   useEffect(() => {
     if (!print) return;
     const id = setTimeout(() => window.print(), 100);
@@ -387,7 +400,7 @@ function App() {
             </button>
           </div>
         )}
-        <Auth onAuth={refresh} />
+        {params.has('auth') ? <Auth onAuth={refresh} /> : <Welcome />}
       </>
     );
   const active = state.records.filter((r) => !r.archived);
@@ -646,6 +659,11 @@ function App() {
                     </button>
                   </section>
                 </div>
+                <BusinessInsights
+                  records={state.records}
+                  onOpen={(record) => setEditing({ tool: getTool(record.module), item: record })}
+                  onNavigate={navigate}
+                />
                 <section className="section">
                   <div className="section-heading">
                     <div>
@@ -965,6 +983,37 @@ function App() {
                                 <td className="muted small">{date(r.updated)}</td>
                                 <td>
                                   <div className="row-actions">
+                                    {canShare(r.module) && !r.archived && (
+                                      <button
+                                        className="icon-button"
+                                        aria-label={'Share ' + r.title}
+                                        onClick={() => setSharing(r)}
+                                      >
+                                        <Icons.Share2 size={16} />
+                                      </button>
+                                    )}
+                                    {r.module === 'proposals' && !r.archived && (
+                                      <button
+                                        disabled={!!converting}
+                                        onClick={async () => {
+                                          setConverting(r.id);
+                                          try {
+                                            await api('/records/' + r.id + '/convert', 'POST', {
+                                              version: r.version,
+                                              requestKey: crypto.randomUUID(),
+                                            });
+                                            await saved();
+                                            navigate('invoices');
+                                          } catch (e) {
+                                            setNotice((e as Error).message);
+                                          } finally {
+                                            setConverting('');
+                                          }
+                                        }}
+                                      >
+                                        {converting === r.id ? 'Preparing…' : 'Create invoice'}
+                                      </button>
+                                    )}
                                     <button
                                       className="icon-button"
                                       aria-label={'Edit ' + r.title}
@@ -1123,6 +1172,7 @@ function App() {
           onSave={saved}
         />
       )}
+      {sharing && <ShareModal record={sharing} onClose={() => setSharing(null)} />}
       {archive && (
         <Modal
           title={archive.archived ? 'Restore record' : 'Archive record'}
@@ -1222,6 +1272,10 @@ function App() {
               check history.
             </p>
             <div className="actions">
+              <button onClick={() => setPanel('password')}>
+                <Icons.LockKeyhole size={16} />
+                Change password
+              </button>
               <button
                 onClick={() =>
                   download(
@@ -1264,7 +1318,9 @@ function App() {
                 <h3>Ready to use</h3>
                 <ul>
                   <li>Private accounts and saved records</li>
-                  <li>Proposals, invoices and project calculations</li>
+                  <li>Itemised proposals, discounts, tax and invoice drafts</li>
+                  <li>Revocable client links, approvals and shared briefs</li>
+                  <li>Currency-separated balances and client response summaries</li>
                   <li>Appointment conflict checks</li>
                   <li>CSV cleanup, image resizing and PDF processing</li>
                   <li>SRT caption editing and quiz creation</li>
@@ -1278,9 +1334,9 @@ function App() {
                   <li>Payments and subscription billing</li>
                   <li>Automatic transcription, translation and AI</li>
                   <li>Video rendering and private uploads</li>
-                  <li>Public client portals, storefronts and booking pages</li>
+                  <li>Full client portals, storefront checkout and public booking calendars</li>
                   <li>Email, SMS and calendar integration</li>
-                  <li>Team access, account recovery and hosted storage</li>
+                  <li>Team access, email account recovery and private file storage</li>
                 </ul>
               </div>
             </div>
@@ -1338,6 +1394,7 @@ function App() {
           </div>
         </Modal>
       )}
+      {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
       {print && (
         <div className="print-preview">
           <div className="print-toolbar">
@@ -1345,20 +1402,30 @@ function App() {
             <button onClick={() => window.print()}>Print / save PDF</button>
           </div>
           <h1>{state.user.name}</h1>
-          {print.map((r) => (
-            <article key={r.id}>
-              <p>
-                {getTool(r.module).name} · {r.status}
-              </p>
-              <h2>{r.title}</h2>
-              {getTool(r.module).fields.map((f) => (
-                <div key={f.key}>
-                  <strong>{f.label}</strong>
-                  <p className="preserve-lines">{String(r.data[f.key] ?? '')}</p>
-                </div>
-              ))}
-            </article>
-          ))}
+          {print.map((r) =>
+            ['proposals', 'invoices'].includes(r.module) ? (
+              <DocumentView
+                key={r.id}
+                title={r.title}
+                brand={state.user.name}
+                data={r.data}
+                module={r.module}
+              />
+            ) : (
+              <article key={r.id}>
+                <p>
+                  {getTool(r.module).name} · {r.status}
+                </p>
+                <h2>{r.title}</h2>
+                {getTool(r.module).fields.map((f) => (
+                  <div key={f.key}>
+                    <strong>{f.label}</strong>
+                    <p className="preserve-lines">{String(r.data[f.key] ?? '')}</p>
+                  </div>
+                ))}
+              </article>
+            ),
+          )}
         </div>
       )}
     </>
@@ -1445,10 +1512,20 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
     );
   }
 }
+function Entry() {
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => {
+    const handler = () => setHash(location.hash);
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, []);
+  const token = new URLSearchParams(hash.slice(1)).get('share');
+  return token ? <PublicPage token={token} /> : <App />;
+}
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <Entry />
     </ErrorBoundary>
   </React.StrictMode>,
 );

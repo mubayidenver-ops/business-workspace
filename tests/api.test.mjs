@@ -259,6 +259,261 @@ test('malformed page URLs do not crash the server', async () => {
   assert.equal((await req('/state', 'GET', undefined, cookieA)).status, 200);
 });
 
+test('private proposal links allow one response and keep workspace details private', async () => {
+  const proposal = (
+    await req(
+      '/records',
+      'POST',
+      {
+        module: 'proposals',
+        title: 'Client offer',
+        status: 'Active',
+        data: {
+          client: 'Client',
+          amount: '0',
+          currency: 'USD',
+          lineItems: JSON.stringify([{ description: 'Design', quantity: 2, rate: 100.05 }]),
+          discountPercent: '10',
+          taxPercent: '15',
+          notes: 'Deliver a new identity.',
+        },
+      },
+      cookieA,
+    )
+  ).data;
+  assert.equal(proposal.data.amount, '207.1');
+  assert.equal(
+    (
+      await req(
+        '/records/' + proposal.id + '/share',
+        'POST',
+        { version: proposal.version, confirmed: false },
+        cookieA,
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await req(
+        '/records/' + proposal.id + '/share',
+        'POST',
+        { version: proposal.version, confirmed: true },
+        cookieB,
+      )
+    ).status,
+    404,
+  );
+  const share = await req(
+    '/records/' + proposal.id + '/share',
+    'POST',
+    { version: proposal.version, confirmed: true, days: 7 },
+    cookieA,
+  );
+  assert.equal(share.status, 201);
+  assert.equal(share.data.token.length, 64);
+  const token = share.data.token;
+  const read = await guest(token);
+  assert.equal(read.status, 200);
+  assert.equal(read.data.document.total, 207.1);
+  assert.equal(read.data.user_id, undefined);
+  assert.equal(read.data.email, undefined);
+  assert.equal(
+    (await guest(token, 'POST', { version: proposal.version, name: 'Client', action: 'approve' }))
+      .status,
+    200,
+  );
+  assert.equal((await guest(token)).status, 410);
+  const state = (await req('/state', 'GET', undefined, cookieA)).data;
+  const updated = state.records.find((r) => r.id === proposal.id);
+  assert.equal(updated.status, 'Completed');
+  assert.equal(JSON.parse(updated.data.clientResponse).action, 'approve');
+  assert.equal(JSON.stringify(state).includes(token), false);
+  const key = crypto.randomUUID();
+  const converted = await req(
+    '/records/' + proposal.id + '/convert',
+    'POST',
+    { version: updated.version, requestKey: key },
+    cookieA,
+  );
+  assert.equal(converted.status, 201);
+  assert.equal(converted.data.module, 'invoices');
+  assert.equal(converted.data.status, 'Draft');
+  assert.equal(converted.data.data.amount, '207.1');
+  assert.equal(converted.data.data.paid, '0');
+  const again = await req(
+    '/records/' + proposal.id + '/convert',
+    'POST',
+    { version: updated.version, requestKey: key },
+    cookieA,
+  );
+  assert.equal(again.data.id, converted.data.id);
+});
+test('sharing can be revoked, replaced, and invalidated by editing', async () => {
+  let record = (
+    await req(
+      '/records',
+      'POST',
+      {
+        module: 'help',
+        title: 'Shared guide',
+        status: 'Active',
+        data: { notes: 'Useful information' },
+      },
+      cookieA,
+    )
+  ).data;
+  const create = () =>
+    req(
+      '/records/' + record.id + '/share',
+      'POST',
+      { version: record.version, confirmed: true },
+      cookieA,
+    );
+  const first = (await create()).data.token,
+    second = (await create()).data.token;
+  assert.equal((await guest(first)).status, 410);
+  assert.equal((await guest(second)).status, 200);
+  await req('/records/' + record.id + '/share', 'DELETE', {}, cookieA);
+  assert.equal((await guest(second)).status, 410);
+  const third = (await create()).data.token;
+  record = (
+    await req('/records/' + record.id, 'PATCH', { ...record, title: 'Updated guide' }, cookieA)
+  ).data;
+  assert.equal((await guest(third)).status, 410);
+});
+test('public onboarding hides internal notes and validates the submitted brief', async () => {
+  const record = (
+    await req(
+      '/records',
+      'POST',
+      {
+        module: 'onboarding',
+        title: 'New project brief',
+        status: 'Draft',
+        data: {
+          client: 'New client',
+          email: 'internal@example.com',
+          notes: 'PRIVATE STAFF NOTES',
+          publicNotes: 'Tell us your goals.',
+        },
+      },
+      cookieA,
+    )
+  ).data;
+  const token = (
+    await req(
+      '/records/' + record.id + '/share',
+      'POST',
+      { version: record.version, confirmed: true },
+      cookieA,
+    )
+  ).data.token;
+  const view = await guest(token);
+  assert.equal(view.data.data.publicNotes, 'Tell us your goals.');
+  assert.equal(JSON.stringify(view.data).includes('PRIVATE STAFF NOTES'), false);
+  assert.equal(JSON.stringify(view.data).includes('internal@example.com'), false);
+  assert.equal(
+    (
+      await guest(token, 'POST', {
+        version: record.version,
+        name: 'Client',
+        email: 'invalid',
+        message: 'Help with a website.',
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await guest(token, 'POST', {
+        version: record.version,
+        name: 'Client',
+        email: 'client@example.com',
+        message: 'Help with a website.',
+      })
+    ).status,
+    200,
+  );
+});
+test('testimonials cannot be shared without consent', async () => {
+  const record = (
+    await req(
+      '/records',
+      'POST',
+      {
+        module: 'testimonials',
+        title: 'Review',
+        status: 'Draft',
+        data: { client: 'Client', notes: 'Good work', consent: false },
+      },
+      cookieA,
+    )
+  ).data;
+  assert.equal(
+    (
+      await req(
+        '/records/' + record.id + '/share',
+        'POST',
+        { version: record.version, confirmed: true },
+        cookieA,
+      )
+    ).status,
+    400,
+  );
+});
+async function guest(token, method = 'GET', body) {
+  const response = await fetch(url + '/api/public', {
+    method,
+    headers: {
+      'X-Workspace-Share': token,
+      ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: response.status, data: await response.json() };
+}
+test('changing password invalidates all existing sessions and preserves records', async () => {
+  const email = 'password-test@example.com',
+    oldPassword = 'old-password-long',
+    newPassword = 'new-password-long';
+  const created = await req('/auth', 'POST', {
+    mode: 'register',
+    name: 'Password test',
+    email,
+    password: oldPassword,
+  });
+  const cookie = created.cookie;
+  const second = (await req('/auth', 'POST', { mode: 'login', email, password: oldPassword }))
+    .cookie;
+  await req(
+    '/records',
+    'POST',
+    { module: 'projects', title: 'Keep this', status: 'Draft', data: {} },
+    cookie,
+  );
+  assert.equal(
+    (await req('/password', 'POST', { currentPassword: 'incorrect-password', newPassword }, cookie))
+      .status,
+    400,
+  );
+  assert.equal(
+    (await req('/password', 'POST', { currentPassword: oldPassword, newPassword }, cookie)).status,
+    200,
+  );
+  assert.equal((await req('/state', 'GET', undefined, cookie)).status, 401);
+  assert.equal((await req('/state', 'GET', undefined, second)).status, 401);
+  assert.equal(
+    (await req('/auth', 'POST', { mode: 'login', email, password: oldPassword })).status,
+    401,
+  );
+  const fresh = await req('/auth', 'POST', { mode: 'login', email, password: newPassword });
+  assert.equal(fresh.status, 200);
+  assert.equal(
+    (await req('/state', 'GET', undefined, fresh.cookie)).data.records[0].title,
+    'Keep this',
+  );
+});
 test('logout invalidates the server session', async () => {
   assert.equal((await req('/logout', 'POST', {}, cookieB)).status, 200);
   assert.equal((await req('/state', 'GET', undefined, cookieB)).status, 401);

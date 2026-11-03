@@ -1,4 +1,8 @@
-# Development release 0.1
+# Development release
+
+## Professional workflow update — 2026-11-03
+
+The new landing page, itemised documents, proposal-to-invoice conversion, revocable client links, client responses, dashboard summaries and password changes are implemented. See [delivered features and limits](pro-upgrade.md). This update supersedes the historical initial-release list below for those capabilities. Billing remains disabled pending a merchant payment provider.
 
 ## DynamoDB update — 2026-11-03
 

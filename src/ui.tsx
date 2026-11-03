@@ -3,6 +3,7 @@ import { X, Search, ArrowRight } from 'lucide-react';
 import { api } from './lib';
 import type { Item, Tool } from './types';
 import { statuses } from '../shared/tools.mjs';
+import { FinancialEditor } from './FinancialEditor';
 export function Modal({
   title,
   children,
@@ -113,17 +114,35 @@ export function RecordEditor({
   const initial = () => ({
     title: item?.title || '',
     status: item?.status || 'Draft',
-    data: Object.fromEntries(
-      tool.fields.map((f) => {
-        let val =
-          item?.data[f.key] ?? (f.key === 'currency' ? 'USD' : f.type === 'checkbox' ? false : '');
-        if (f.type === 'datetime-local' && typeof val === 'string' && val) {
-          const d = new Date(val);
-          val = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-        }
-        return [f.key, val];
-      }),
-    ),
+    data: {
+      ...Object.fromEntries(
+        tool.fields.map((f) => {
+          let val =
+            item?.data[f.key] ??
+            (f.key === 'currency' ? 'USD' : f.type === 'checkbox' ? false : '');
+          if (f.type === 'datetime-local' && typeof val === 'string' && val) {
+            const d = new Date(val);
+            val = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+          }
+          return [f.key, val];
+        }),
+      ),
+      ...(['proposals', 'invoices'].includes(tool.id)
+        ? {
+            lineItems:
+              item?.data.lineItems ||
+              JSON.stringify([
+                {
+                  description: item ? 'Services' : '',
+                  quantity: 1,
+                  rate: Number(item?.data.amount || 0),
+                },
+              ]),
+            discountPercent: item?.data.discountPercent || '0',
+            taxPercent: item?.data.taxPercent || '0',
+          }
+        : {}),
+    } as Record<string, string | boolean>,
   });
   const [form, setForm] = useState(initial);
   const original = useRef(JSON.stringify(initial()));
@@ -226,53 +245,90 @@ export function RecordEditor({
               />
             </label>
             <div className="form-grid">
-              {tool.fields.map((f) => (
-                <label
-                  key={f.key}
-                  className={
-                    f.type === 'textarea' ? 'span-two' : f.type === 'checkbox' ? 'check-label' : ''
-                  }
-                  htmlFor={'field-' + f.key}
-                >
-                  {f.label}
-                  {f.required ? ' *' : ''}
-                  {f.type === 'textarea' ? (
-                    <textarea
-                      className="resize-none"
-                      id={'field-' + f.key}
-                      style={{ resize: 'none' }}
-                      required={f.required}
-                      rows={6}
-                      value={String(form.data[f.key])}
-                      onChange={(e) =>
-                        setForm({ ...form, data: { ...form.data, [f.key]: e.target.value } })
-                      }
-                      aria-describedby="record-error"
-                    />
-                  ) : (
-                    <input
-                      id={'field-' + f.key}
-                      type={f.type}
-                      required={f.required}
-                      min={f.type === 'number' ? 0 : undefined}
-                      step={f.type === 'number' ? 'any' : undefined}
-                      checked={f.type === 'checkbox' ? !!form.data[f.key] : undefined}
-                      value={f.type === 'checkbox' ? undefined : String(form.data[f.key])}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          data: {
-                            ...form.data,
-                            [f.key]: f.type === 'checkbox' ? e.target.checked : e.target.value,
-                          },
-                        })
-                      }
-                      aria-describedby="record-error"
-                    />
-                  )}
-                </label>
-              ))}
+              {tool.fields
+                .filter((f) => !(f.key === 'amount' && ['proposals', 'invoices'].includes(tool.id)))
+                .map((f) => (
+                  <label
+                    key={f.key}
+                    className={
+                      f.type === 'textarea'
+                        ? 'span-two'
+                        : f.type === 'checkbox'
+                          ? 'check-label'
+                          : ''
+                    }
+                    htmlFor={'field-' + f.key}
+                  >
+                    {f.label}
+                    {f.required ? ' *' : ''}
+                    {f.type === 'textarea' ? (
+                      <textarea
+                        className="resize-none"
+                        id={'field-' + f.key}
+                        style={{ resize: 'none' }}
+                        required={f.required}
+                        rows={6}
+                        value={String(form.data[f.key])}
+                        onChange={(e) =>
+                          setForm({ ...form, data: { ...form.data, [f.key]: e.target.value } })
+                        }
+                        aria-describedby="record-error"
+                      />
+                    ) : (
+                      <input
+                        id={'field-' + f.key}
+                        type={f.type}
+                        required={f.required}
+                        min={f.type === 'number' ? 0 : undefined}
+                        step={f.type === 'number' ? 'any' : undefined}
+                        checked={f.type === 'checkbox' ? !!form.data[f.key] : undefined}
+                        value={f.type === 'checkbox' ? undefined : String(form.data[f.key])}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            data: {
+                              ...form.data,
+                              [f.key]: f.type === 'checkbox' ? e.target.checked : e.target.value,
+                            },
+                          })
+                        }
+                        aria-describedby="record-error"
+                      />
+                    )}
+                  </label>
+                ))}
             </div>
+            {['proposals', 'invoices'].includes(tool.id) && (
+              <FinancialEditor data={form.data} onChange={(data) => setForm({ ...form, data })} />
+            )}
+            {item?.data.clientResponse && (
+              <section className="client-response-history">
+                <span className="eyebrow">CLIENT RESPONSE</span>
+                {(() => {
+                  try {
+                    const response = JSON.parse(String(item.data.clientResponse));
+                    return (
+                      <>
+                        <h3>
+                          {response.action === 'approve'
+                            ? 'Approved'
+                            : response.action === 'changes'
+                              ? 'Changes requested'
+                              : 'Project brief received'}
+                        </h3>
+                        <p className="small muted">
+                          {response.name} · {new Date(response.created).toLocaleString()}
+                        </p>
+                        {response.email && <p className="small">{response.email}</p>}
+                        <p className="preserve-lines">{response.message}</p>
+                      </>
+                    );
+                  } catch {
+                    return <p>Response details are unavailable.</p>;
+                  }
+                })()}
+              </section>
+            )}
             <label htmlFor="record-status">
               Status
               <select

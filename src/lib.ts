@@ -27,7 +27,6 @@ export function money(value: unknown, currency: unknown = 'USD') {
     return new Intl.NumberFormat(navigator.language, {
       style: 'currency',
       currency: String(currency || 'USD'),
-      maximumFractionDigits: 2,
     }).format(Number(value) || 0);
   } catch {
     return String(value);

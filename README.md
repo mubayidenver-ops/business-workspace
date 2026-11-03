@@ -4,7 +4,7 @@ Designed by **lordyvites** · [GitHub profile](https://github.com/mubayidenver-o
 
 A connected workbench for independent businesses, with 30 module workspaces for clients, operations, files, content, learning, commerce and websites.
 
-**Development release.** Real local accounts and persistent records, working file utilities and bounded website checks. Billing, public portals and automatic media/AI providers are not connected. See [exact capability status](docs/release-status.md) before using the app.
+**Development release.** Real local accounts and persistent records, working file utilities and bounded website checks. Itemised proposals/invoices, expiring client approval and brief links, dashboard insights and password changes are implemented. Billing and automatic media/AI providers are not connected. See [the professional workflow upgrade](docs/pro-upgrade.md). See [exact capability status](docs/release-status.md) before using the app.
 
 ## Run locally
 

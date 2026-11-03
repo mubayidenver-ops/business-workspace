@@ -1,11 +1,38 @@
 import { byId, statuses } from '../shared/tools.mjs';
+import { calculateDocument } from '../shared/pricing.mjs';
 export function validateRecord(module, input) {
   const tool = Object.hasOwn(byId, module) ? byId[module] : null;
   if (!tool) throw new Error('Unknown tool.');
+  let pricing;
+  if (['proposals', 'invoices'].includes(module) && input.data?.lineItems) {
+    let items;
+    try {
+      items = JSON.parse(input.data.lineItems);
+    } catch {
+      throw new Error('Line items must be valid JSON.');
+    }
+    pricing = calculateDocument(
+      items,
+      String(input.data.currency || 'USD').toUpperCase(),
+      input.data.discountPercent,
+      input.data.taxPercent,
+    );
+    input = {
+      ...input,
+      data: { ...input.data, amount: String(pricing.total), currency: pricing.currency },
+    };
+  }
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 180)
     throw new Error('Enter a title of 1–180 characters.');
   if (!statuses.includes(input.status)) throw new Error('Choose a valid status.');
   const data = {};
+  if (pricing) {
+    data.lineItems = JSON.stringify(
+      pricing.lines.map(({ description, quantity, rate }) => ({ description, quantity, rate })),
+    );
+    data.discountPercent = String(Number(input.data.discountPercent || 0));
+    data.taxPercent = String(Number(input.data.taxPercent || 0));
+  }
   for (const field of tool.fields) {
     let value = input.data?.[field.key] ?? '';
     if (field.type === 'checkbox') {

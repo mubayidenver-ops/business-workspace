@@ -67,7 +67,7 @@ export const tools = [
       f('notes', 'Version notes and feedback', 'textarea'),
     ],
     integration:
-      'Internal review records. External client access and expiring review links are not enabled yet.',
+      'Create an expiring private link so a client can approve the work or request changes. Links close after one response.',
   },
   {
     id: 'onboarding',
@@ -79,6 +79,7 @@ export const tools = [
     fields: [
       f('client', 'Client', 'text', true),
       f('email', 'Contact email', 'email'),
+      f('publicNotes', 'Instructions shown on the shared brief', 'textarea'),
       f('notes', 'Brief and requirements', 'textarea'),
     ],
   },
@@ -159,7 +160,7 @@ export const tools = [
       f('consent', 'Permission to publish', 'checkbox'),
     ],
     integration:
-      'Testimonials remain private here. Public collection forms and publishing will be added separately.',
+      'Share an individual testimonial through an expiring link after recording permission to publish.',
   },
   {
     id: 'feedback',
@@ -179,7 +180,7 @@ export const tools = [
     unit: 'article',
     fields: [f('category', 'Category'), f('notes', 'Article content', 'textarea', true)],
     integration:
-      'Searchable private article library. Public help-centre publishing is not enabled yet.',
+      'Searchable articles with expiring links for sharing individual guides. A full public help-centre website is not included yet.',
   },
   {
     id: 'meetings',
@@ -347,7 +348,7 @@ export const tools = [
       f('notes', 'Project story', 'textarea'),
     ],
     integration:
-      'Build records and export a printable portfolio. Hosted public pages are not connected.',
+      'Create project stories, export a printable portfolio and share individual projects through expiring links.',
   },
   {
     id: 'store',

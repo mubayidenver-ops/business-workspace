@@ -41,6 +41,8 @@ The local development API supports a maximum of 1,000 records per account; lists
 
 ## Forms, overlays and feedback
 
+Professional workflow additions: sharing is an explicit publish action requiring an owner checkbox confirmation. ShareModal uses the existing Modal primitive, with expiry, copy/preview and confirmed revocation. PublicPage receives only a whitelisted document projection. Responses consume the link once. FinancialEditor owns line-item entry; DocumentView owns document display/print. Server totals are authoritative. PasswordModal masks all secrets, requires the current password, and redirects to sign-in after revoking existing sessions. See docs/pro-upgrade.md for the data and security contract.
+
 Product forms disable native validation bubbles. Required fields, semantic types and field associations remain. Errors have live regions and field help references. Native dialog owns focus trap, Escape and inert background. Restore trigger focus on close. Reversible archive uses warning emphasis and a Cancel-first confirmation. There is no permanent record deletion UI. Private record retention is described in docs/release-status.md; do not infer a legal retention commitment.
 
 Secret inputs are masked with a show/hide button. No secrets are persisted in browser storage. Favourites only use local storage. Textareas use resize:none and adequate height. SearchBox owns clear-and-refocus. Single-select native controls and date/time native pickers are accepted platform variants.

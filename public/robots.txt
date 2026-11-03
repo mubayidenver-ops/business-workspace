@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://business-workspace-lordyvites.onrender.com/sitemap.xml

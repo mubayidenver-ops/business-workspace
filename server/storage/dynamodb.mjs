@@ -38,7 +38,11 @@ export class DynamoStore {
     this.client = new DynamoDBClient({
       region,
       maxAttempts: 3,
-      requestHandler: { connectionTimeout: 3000, requestTimeout: 10000 },
+      requestHandler: {
+        connectionTimeout: 3000,
+        requestTimeout: 10000,
+        throwOnRequestTimeout: true,
+      },
       ...(endpoint
         ? { endpoint, credentials: { accessKeyId: 'localtest', secretAccessKey: 'localtest' } }
         : {}),
@@ -136,6 +140,7 @@ export class DynamoStore {
           pk: `SESSION#${token}`,
           sk: 'SESSION',
           user: { id, email, name },
+          credentialVersion: user.credentialVersion || 0,
           expires,
           ttl: Math.floor(expires / 1000),
         },
@@ -144,12 +149,47 @@ export class DynamoStore {
   }
   async sessionUser(token) {
     const session = await this.get(`SESSION#${token}`, 'SESSION');
-    return session && session.expires > Date.now() ? session.user : null;
+    if (!session || session.expires <= Date.now()) return null;
+    const profile = await this.userByEmail(session.user.email);
+    return profile &&
+      profile.id === session.user.id &&
+      (profile.credentialVersion || 0) === (session.credentialVersion || 0)
+      ? session.user
+      : null;
   }
   async deleteSession(token) {
     await this.doc.send(
       new DeleteCommand({ TableName: this.table, Key: { pk: `SESSION#${token}`, sk: 'SESSION' } }),
     );
+  }
+  async changePassword(email, expectedHash, password) {
+    const profile = await this.userByEmail(email);
+    if (!profile || profile.password !== expectedHash)
+      throw storageError(409, 'Your account changed. Sign in again before changing the password.');
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: {
+            pk: `ACCOUNT#${email}`,
+            sk: 'PROFILE',
+            ...profile,
+            password,
+            credentialVersion: (profile.credentialVersion || 0) + 1,
+          },
+          ConditionExpression: '#password = :expected',
+          ExpressionAttributeNames: { '#password': 'password' },
+          ExpressionAttributeValues: { ':expected': expectedHash },
+        }),
+      );
+    } catch (e) {
+      if (collision(e))
+        throw storageError(
+          409,
+          'Your account changed. Sign in again before changing the password.',
+        );
+      throw e;
+    }
   }
   async getRecord(userId, id) {
     return omitKeys(await this.get(workspace(userId), `RECORD#${id}`));
@@ -312,6 +352,87 @@ export class DynamoStore {
   }
   async monitors() {
     return (await this.query('MONITORS', '', { limit: 50 })).map(omitKeys);
+  }
+  async createShare(userId, id, version, share) {
+    return this.mutate(userId, async ({ records }) => {
+      const record = records.find((r) => r.id === id);
+      if (!record || record.version !== version)
+        throw storageError(409, 'The record changed. Refresh before sharing.');
+      const previous = await this.shareForRecord(userId, id);
+      const items = [
+        {
+          Put: {
+            TableName: this.table,
+            Item: {
+              pk: `SHARE#${share.hash}`,
+              sk: 'LINK',
+              ...share,
+              ttl: Math.floor(share.expires / 1000),
+            },
+          },
+        },
+        {
+          Put: {
+            TableName: this.table,
+            Item: {
+              pk: workspace(userId),
+              sk: `SHARE#${id}`,
+              ...share,
+              ttl: Math.floor(share.expires / 1000),
+            },
+          },
+        },
+      ];
+      if (previous)
+        items.push({
+          Delete: { TableName: this.table, Key: { pk: `SHARE#${previous.hash}`, sk: 'LINK' } },
+        });
+      return { items, result: undefined };
+    });
+  }
+  async shareForRecord(userId, id) {
+    return omitKeys(await this.get(workspace(userId), `SHARE#${id}`));
+  }
+  async getShare(hash) {
+    const share = omitKeys(await this.get(`SHARE#${hash}`, 'LINK'));
+    return share && share.expires > Date.now() ? share : null;
+  }
+  async revokeShare(userId, id) {
+    return this.mutate(userId, async () => {
+      const previous = await this.shareForRecord(userId, id);
+      if (!previous) return { result: undefined };
+      return {
+        items: [
+          { Delete: { TableName: this.table, Key: { pk: `SHARE#${previous.hash}`, sk: 'LINK' } } },
+          { Delete: { TableName: this.table, Key: { pk: workspace(userId), sk: `SHARE#${id}` } } },
+        ],
+        result: undefined,
+      };
+    });
+  }
+  async respondToShare(hash, version, patch) {
+    const initial = await this.getShare(hash);
+    if (!initial) throw storageError(410, 'This link is no longer available.');
+    return this.mutate(initial.user_id, async ({ records }) => {
+      const share = await this.getShare(hash);
+      if (!share) throw storageError(410, 'This link is no longer available.');
+      if (share.recordVersion !== version)
+        throw storageError(409, 'This document changed. Request a new link.');
+      const record = changeRecord(records, share.record_id, version, patch);
+      return {
+        items: [
+          ...this.recordWrites(record),
+          { Delete: { TableName: this.table, Key: { pk: `SHARE#${hash}`, sk: 'LINK' } } },
+          {
+            Delete: {
+              TableName: this.table,
+              Key: { pk: workspace(initial.user_id), sk: `SHARE#${record.id}` },
+            },
+          },
+        ],
+        result: record,
+      };
+    });
   }
   async cleanup() {
     /* DynamoDB TTL removes expired sessions and history once enabled. */

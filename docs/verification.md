@@ -21,3 +21,7 @@ The original verification below records the first local release.
 - Deployment and paid integrations: not performed. The missing capabilities are listed in release-status.md.
 
 No real customer records, account databases, payment credentials or API keys are included in the repository.
+
+## Professional workflow upgrade checks — 2026-11-03
+
+Production build and TypeScript checks passed. Default tests: 27 passed, one DynamoDB suite skipped. The explicit DynamoDB Local integration run passed all 28 tests, including account isolation, concurrent writes, expiring/revoked links, single-response enforcement and password-session invalidation. Premium static design audit reported zero findings. Public deployment checks follow publication; these local checks do not claim visual browser or live payment verification.

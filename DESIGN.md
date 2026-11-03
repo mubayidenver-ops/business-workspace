@@ -34,6 +34,8 @@ components:
 
 ## Overview
 
+The professional-workflow release adds a public marketing register in src/Welcome.tsx and src/pro.css, while preserving the existing workspace identity. Its signature is an illustrated Connect / Create / Deliver workflow; the public site uses no fabricated customer metrics. Shared client pages use document-like surfaces and a separate response panel. FinancialEditor, DocumentView, ShareModal, PublicPage and PasswordModal extend the canonical component system. Existing colors and type tokens remain authoritative.
+
 ### Creative North Star
 
 A well-arranged studio tool cabinet: every instrument has a home, and related work sits together. Product register, not a sales landing page. The audience is freelancers and small agencies, serving international clients, as requested in docs/design.md.
