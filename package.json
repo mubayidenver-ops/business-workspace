@@ -11,11 +11,14 @@
     "build": "tsc --noEmit && vite build",
     "start": "node server/index.mjs",
     "test": "node --test tests/*.test.mjs",
+    "test:dynamodb": "node scripts/test-dynamodb.mjs",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1161.0",
+    "@aws-sdk/lib-dynamodb": "^3.1161.0",
     "lucide-react": "^0.468.0",
     "pdf-lib": "^1.17.1",
     "react": "^19.2.0",

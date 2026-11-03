@@ -4,21 +4,25 @@ services:
     runtime: node
     repo: https://github.com/mubayidenver-ops/business-workspace
     branch: main
-    plan: 0.5c-512mb
+    plan: free
     numInstances: 1
     buildCommand: npm ci --include=dev && npm run build
     startCommand: node server/index.mjs
     healthCheckPath: /api/health
-    disk:
-      name: workspace-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
       - key: HOST
         value: 0.0.0.0
-      - key: DATA_DIR
-        value: /var/data
+      - key: STORAGE_BACKEND
+        value: dynamodb
+      - key: AWS_REGION
+        value: eu-north-1
+      - key: DYNAMODB_TABLE
+        value: business-workspace
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
       - key: COOKIE_SECURE
         value: 'true'

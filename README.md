@@ -8,6 +8,8 @@ A connected workbench for independent businesses, with 30 module workspaces for 
 
 ## Run locally
 
+**DynamoDB cloud storage is now supported.** The hosting configuration targets your `business-workspace` table in `eu-north-1`, with no paid disk. Configure server-side AWS access before deployment; see [DynamoDB setup and limitations](docs/dynamodb.md). The local defaults below preserve existing SQLite data.
+
 Requires Node.js 24 or newer and npm.
 
 ```sh
@@ -30,7 +32,7 @@ For live development, use `npm run dev`. `npm test` runs API, isolation, validat
 | APP_URL              | request origin | Exact trusted public origin, e.g. https://workspace.example.com |
 | COOKIE_SECURE        | false          | Set true behind HTTPS in production                             |
 
-No paid API keys are required for the implemented utilities. No code here enables payment collection. Website checks allow public IPv4 HTTP/HTTPS on standard ports, limit response sizes and redirects, and keep up to 30 results per record. Timers stop when the server stops.
+Cloud storage additionally uses `STORAGE_BACKEND=dynamodb`, `AWS_REGION=eu-north-1`, and `DYNAMODB_TABLE=business-workspace`, plus secure server-side AWS authentication. No code here enables payment collection. Website checks allow public IPv4 HTTP/HTTPS on standard ports and limit response sizes and redirects. SQLite retains 30 checks per record; DynamoDB uses seven-day TTL history and shows the latest 200 checks per workspace. Timers stop when the server stops or the hosting service sleeps.
 
 ## Structure
 
@@ -40,6 +42,6 @@ No paid API keys are required for the implemented utilities. No code here enable
 - `tests/`: meaningful domain and API regression tests
 - `docs/`: approved product design, implementation plan and release boundaries
 
-The intended production architecture is React/TypeScript, PostgreSQL, private object storage and durable background jobs. The current Node/SQLite implementation makes the first release runnable without purchasing services; it is not a substitute for those production dependencies.
+The app uses React/TypeScript with server-side DynamoDB for the requested cloud deployment, and SQLite for local development. Private object storage and durable background jobs are future production capabilities. The free hosting configuration is for preview/development and does not provide continuous monitoring.
 
 Do not commit `.env`, the database, account exports or real customer data. No deployment has been made automatically.

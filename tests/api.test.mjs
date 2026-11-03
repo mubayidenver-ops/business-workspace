@@ -5,12 +5,27 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
-let server, url, dir, cookieA, cookieB, record;
+import { localDynamoFixture } from './dynamo-support.mjs';
+let server, url, dir, cookieA, cookieB, record, dynamo;
 before(async () => {
+  if (process.env.DYNAMODB_TEST_ENDPOINT) dynamo = await localDynamoFixture();
   dir = await mkdtemp(join(tmpdir(), 'bw-test-'));
   server = spawn(process.execPath, ['server/index.mjs'], {
     cwd: process.cwd(),
-    env: { ...process.env, DATA_DIR: dir, PORT: '0' },
+    env: {
+      ...process.env,
+      DATA_DIR: dir,
+      PORT: '0',
+      STORAGE_BACKEND: dynamo ? 'dynamodb' : 'sqlite',
+      ...(dynamo
+        ? {
+            NODE_ENV: 'test',
+            DYNAMODB_ENDPOINT: dynamo.endpoint,
+            DYNAMODB_TABLE: dynamo.table,
+            AWS_REGION: 'eu-north-1',
+          }
+        : {}),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   url = await new Promise((resolve, reject) => {
@@ -39,6 +54,7 @@ after(async () => {
     await closed;
   }
   if (dir) await rm(dir, { recursive: true, force: true });
+  if (dynamo) await dynamo.close();
 });
 async function req(path, method = 'GET', data, cookie, origin) {
   const response = await fetch(url + '/api' + path, {

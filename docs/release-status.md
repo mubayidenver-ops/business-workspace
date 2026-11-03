@@ -1,5 +1,9 @@
 # Development release 0.1
 
+## DynamoDB update — 2026-11-03
+
+The requested DynamoDB adapter is implemented for cloud storage. Local development retains SQLite and its existing records. Hosting configuration now selects DynamoDB in `eu-north-1` and a Free Render instance without a paid disk. Accounts, sessions, records, idempotent writes, feedback and website-check history use the selected database. See [DynamoDB configuration](dynamodb.md) for authentication, expiry, costs and remaining live-verification requirements. The original release list below describes the initial local implementation; cloud connectivity and public deployment are not claimed until tested with securely configured host credentials.
+
 This is a runnable first development release, not a launched paid service. All 30 tools have module-specific record management. The complete original scope remains in docs/design.md; a saved record screen does not imply every service is finished.
 
 ## Implemented

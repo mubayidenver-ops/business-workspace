@@ -4,6 +4,8 @@ Status: approved by the user on 2026-11-03. Implementation is underway; see rele
 
 ## Product
 
+Architecture amendment requested by the user on 2026-11-03: use Amazon DynamoDB for cloud storage instead of the originally proposed PostgreSQL. The local SQLite path is retained for development. See dynamodb.md for the implemented data model and hosting constraints.
+
 A responsive web application bringing 30 business services into one workspace. Initial audience: freelancers and small agencies. One account, shared clients, projects and files; separate tools with explicit availability and usage limits. English first, international date/time and currency support; payments and languages expand according to provider availability.
 
 ## Approach

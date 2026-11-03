@@ -1,25 +1,14 @@
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { byId } from '../shared/tools.mjs';
+import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
 import { safeFetch } from './network.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const dataDir = process.env.DATA_DIR || resolve(root, 'data');
-mkdirSync(dataDir, { recursive: true });
-const db = new DatabaseSync(resolve(dataDir, 'workspace.sqlite'));
-db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
-CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),module TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL,updated TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS checks(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),record_id TEXT NOT NULL REFERENCES records(id) ON DELETE CASCADE,created TEXT NOT NULL,result TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS votes(record_id TEXT NOT NULL REFERENCES records(id),user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(record_id,user_id));
-CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL REFERENCES users(id),key TEXT NOT NULL,hash TEXT NOT NULL,record_id TEXT NOT NULL REFERENCES records(id),PRIMARY KEY(user_id,key));
-CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
+const store = await createStore(root);
 const json = (res, status, value, headers = {}) => {
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -32,7 +21,7 @@ const toRecord = (r) => ({
   ...r,
   data: JSON.parse(r.data),
   archived: !!r.archived,
-  votes: db.prepare('SELECT COUNT(*) AS n FROM votes WHERE record_id=?').get(r.id).n,
+  votes: r.votes || 0,
 });
 const fail = (status, message) => Object.assign(new Error(message), { status });
 async function body(req) {
@@ -58,19 +47,12 @@ function rate(key, max = 20) {
   if (++v.n > max) throw fail(429, 'Too many attempts. Try again in 15 minutes.');
 }
 const sessionHash = (t) => createHash('sha256').update(t).digest('hex');
-function userFor(req) {
+async function userFor(req) {
   const token = /\bbw_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
-  if (!token) return null;
-  return (
-    db
-      .prepare(
-        'SELECT u.id,u.email,u.name FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?',
-      )
-      .get(sessionHash(token), Date.now()) ?? null
-  );
+  return token ? store.sessionUser(sessionHash(token)) : null;
 }
-function own(user, id) {
-  const r = db.prepare('SELECT * FROM records WHERE id=? AND user_id=?').get(id, user.id);
+async function own(user, id) {
+  const r = await store.getRecord(user.id, id);
   if (!r) throw fail(404, 'This record is not available.');
   return r;
 }
@@ -90,10 +72,8 @@ async function check(record) {
     };
     if (record.module === 'changes') {
       result.fingerprint = createHash('sha256').update(page.body).digest('hex');
-      const previous = db
-        .prepare('SELECT result FROM checks WHERE record_id=? ORDER BY created DESC LIMIT 1')
-        .get(record.id);
-      const prev = previous ? JSON.parse(previous.result) : null;
+      const previous = await store.latestCheck(record.user_id, record.id);
+      const prev = previous?.result;
       result.changed = !!prev?.fingerprint && prev.fingerprint !== result.fingerprint;
     }
     if (record.module === 'expiry') result.certificateExpires = page.certificate;
@@ -102,7 +82,7 @@ async function check(record) {
       const urls = [
         ...new Set(
           hrefs
-            .filter((h) => !h.startsWith('#'))
+            .filter((h) => !h.startsWith('#') && h.length <= 2048)
             .map((h) => {
               try {
                 const u = new URL(h, page.url);
@@ -134,16 +114,7 @@ async function check(record) {
   } finally {
     checking.delete(record.id);
   }
-  db.prepare('INSERT INTO checks VALUES(?,?,?,?,?)').run(
-    randomUUID(),
-    record.user_id,
-    record.id,
-    new Date().toISOString(),
-    JSON.stringify(result),
-  );
-  db.prepare(
-    'DELETE FROM checks WHERE record_id=? AND id NOT IN (SELECT id FROM checks WHERE record_id=? ORDER BY created DESC LIMIT 30)',
-  ).run(record.id, record.id);
+  await store.saveCheck(record, result);
   return result;
 }
 let vite;
@@ -158,7 +129,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/api/health' && req.method === 'GET') {
     try {
-      db.prepare('SELECT 1').get();
+      await store.health();
       json(res, 200, { status: 'ready' });
     } catch {
       json(res, 503, { status: 'unavailable' });
@@ -229,7 +200,7 @@ const server = createServer(async (req, res) => {
         password.length > 128
       )
         throw fail(400, 'Use a valid email and a password of 10–128 characters.');
-      let u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+      let u = await store.userByEmail(email);
       if (b.mode === 'register') {
         if (u) throw fail(400, 'This email is already registered. Sign in instead.');
         const name = String(b.name || '').trim();
@@ -238,7 +209,7 @@ const server = createServer(async (req, res) => {
         const salt = randomBytes(16).toString('hex');
         const hash = scryptSync(password, salt, 64).toString('hex');
         const id = randomUUID();
-        db.prepare('INSERT INTO users VALUES(?,?,?,?)').run(id, email, name, salt + ':' + hash);
+        await store.createUser({ id, email, name, password: salt + ':' + hash });
         u = { id, email, name };
       } else {
         const salt = u?.password.split(':')[0] || 'not-a-real-user';
@@ -247,11 +218,7 @@ const server = createServer(async (req, res) => {
           throw fail(401, 'Email or password is incorrect.');
       }
       const token = randomBytes(32).toString('hex');
-      db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(
-        sessionHash(token),
-        u.id,
-        Date.now() + 7 * 86400000,
-      );
+      await store.createSession(sessionHash(token), u, Date.now() + 7 * 86400000);
       json(
         res,
         200,
@@ -262,11 +229,11 @@ const server = createServer(async (req, res) => {
       );
       return;
     }
-    const user = userFor(req);
+    const user = await userFor(req);
     if (!user) throw fail(401, 'Sign in to open your workspace.');
     if (url.pathname === '/api/logout' && req.method === 'POST') {
       const token = /\bbw_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
-      db.prepare('DELETE FROM sessions WHERE token=?').run(sessionHash(token));
+      await store.deleteSession(sessionHash(token));
       json(
         res,
         200,
@@ -276,16 +243,13 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === '/api/state' && req.method === 'GET') {
+      const state = await store.state(user.id);
       json(res, 200, {
         user,
-        records: db
-          .prepare('SELECT * FROM records WHERE user_id=? ORDER BY updated DESC LIMIT 1000')
-          .all(user.id)
-          .map(toRecord),
-        checks: db
-          .prepare('SELECT * FROM checks WHERE user_id=? ORDER BY created DESC LIMIT 200')
-          .all(user.id)
-          .map((c) => ({ ...c, result: JSON.parse(c.result) })),
+        records: state.records.map(toRecord),
+        checks: state.checks,
+        storage:
+          process.env.STORAGE_BACKEND === 'dynamodb' ? 'Amazon DynamoDB' : 'Local server database',
       });
       return;
     }
@@ -304,69 +268,13 @@ const server = createServer(async (req, res) => {
       const requestHash = createHash('sha256')
         .update(JSON.stringify({ module: b.module, ...record }))
         .digest('hex');
-      if (requestKey) {
-        const previous = db
-          .prepare('SELECT * FROM requests WHERE user_id=? AND key=?')
-          .get(user.id, requestKey);
-        if (previous) {
-          if (previous.hash !== requestHash)
-            throw fail(
-              409,
-              'This request was already saved with different details. Close this editor and reopen the saved record.',
-            );
-          json(res, 200, toRecord(own(user, previous.record_id)));
-          return;
-        }
-      }
-      if (db.prepare('SELECT COUNT(*) AS n FROM records WHERE user_id=?').get(user.id).n >= 1000)
-        throw fail(400, 'This development release supports 1,000 records per workspace.');
-      if (b.module === 'booking' && !['Cancelled', 'Completed'].includes(record.status)) {
-        const overlap = db
-          .prepare(
-            "SELECT data FROM records WHERE user_id=? AND module='booking' AND archived=0 AND status NOT IN ('Cancelled','Completed')",
-          )
-          .all(user.id)
-          .some((r) => {
-            const d = JSON.parse(r.data);
-            return record.data.start < d.end && record.data.end > d.start;
-          });
-        if (overlap)
-          throw fail(409, 'That time overlaps another appointment. Choose another time.');
-      }
-      const id = randomUUID(),
-        now = new Date().toISOString();
-      db.exec('BEGIN');
-      try {
-        db.prepare(
-          'INSERT INTO records(id,user_id,module,title,status,data,created,updated) VALUES(?,?,?,?,?,?,?,?)',
-        ).run(
-          id,
-          user.id,
-          b.module,
-          record.title,
-          record.status,
-          JSON.stringify(record.data),
-          now,
-          now,
-        );
-        if (requestKey)
-          db.prepare('INSERT INTO requests VALUES(?,?,?,?)').run(
-            user.id,
-            requestKey,
-            requestHash,
-            id,
-          );
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      }
-      json(res, 201, toRecord(own(user, id)));
+      const saved = await store.createRecord(user.id, b.module, record, requestKey, requestHash);
+      json(res, saved.replayed ? 200 : 201, toRecord(saved.record));
       return;
     }
     const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote))?$/.exec(url.pathname);
     if (match) {
-      const r = own(user, match[1]);
+      const r = await own(user, match[1]);
       if (match[2] === 'check' && req.method === 'POST') {
         if (!['uptime', 'links', 'changes', 'expiry'].includes(r.module))
           throw fail(400, 'This tool does not run website checks.');
@@ -376,7 +284,7 @@ const server = createServer(async (req, res) => {
       }
       if (match[2] === 'vote' && req.method === 'POST') {
         if (r.module !== 'feedback') throw fail(400, 'Only feedback can receive votes.');
-        db.prepare('INSERT OR IGNORE INTO votes VALUES(?,?)').run(r.id, user.id);
+        await store.vote(user.id, r.id);
         json(res, 200, { ok: true });
         return;
       }
@@ -387,10 +295,9 @@ const server = createServer(async (req, res) => {
             409,
             'This record changed in another window. Close and reopen it before saving.',
           );
+        let patch;
         if (b.title === undefined && typeof b.archived === 'boolean') {
-          db.prepare(
-            'UPDATE records SET archived=?,version=version+1,updated=? WHERE id=? AND user_id=?',
-          ).run(b.archived ? 1 : 0, new Date().toISOString(), r.id, user.id);
+          patch = { archived: b.archived };
         } else {
           let record;
           try {
@@ -398,34 +305,10 @@ const server = createServer(async (req, res) => {
           } catch (e) {
             throw fail(400, e.message);
           }
-          if (
-            r.module === 'booking' &&
-            !r.archived &&
-            !['Cancelled', 'Completed'].includes(record.status)
-          ) {
-            const overlap = db
-              .prepare(
-                "SELECT data FROM records WHERE user_id=? AND id<>? AND module='booking' AND archived=0 AND status NOT IN ('Cancelled','Completed')",
-              )
-              .all(user.id, r.id)
-              .some((a) => {
-                const d = JSON.parse(a.data);
-                return record.data.start < d.end && record.data.end > d.start;
-              });
-            if (overlap) throw fail(409, 'That time overlaps another appointment.');
-          }
-          db.prepare(
-            'UPDATE records SET title=?,status=?,data=?,version=version+1,updated=? WHERE id=? AND user_id=?',
-          ).run(
-            record.title,
-            record.status,
-            JSON.stringify(record.data),
-            new Date().toISOString(),
-            r.id,
-            user.id,
-          );
+          patch = { title: record.title, status: record.status, data: JSON.stringify(record.data) };
         }
-        json(res, 200, toRecord(own(user, r.id)));
+        const updated = await store.updateRecord(user.id, r.id, b.version, patch);
+        json(res, 200, toRecord(updated));
         return;
       }
     }
@@ -446,17 +329,11 @@ const interval = setInterval(async () => {
   if (scheduled) return;
   scheduled = true;
   try {
-    db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());
+    await store.cleanup();
     for (const [key, value] of rates) if (value.until < Date.now()) rates.delete(key);
-    const monitors = db
-      .prepare(
-        "SELECT * FROM records WHERE archived=0 AND status='Active' AND module IN ('uptime','changes') LIMIT 50",
-      )
-      .all();
+    const monitors = await store.monitors();
     for (const r of monitors) {
-      const last = db
-        .prepare('SELECT created FROM checks WHERE record_id=? ORDER BY created DESC LIMIT 1')
-        .get(r.id);
+      const last = await store.latestCheck(r.user_id, r.id);
       if (!last || Date.now() - Date.parse(last.created) > 300000) await check(r);
     }
   } catch (e) {
@@ -468,8 +345,8 @@ const interval = setInterval(async () => {
 interval.unref();
 process.on('SIGTERM', () => {
   clearInterval(interval);
-  server.close(() => {
-    db.close();
+  server.close(async () => {
+    await store.close();
     process.exit(0);
   });
 });

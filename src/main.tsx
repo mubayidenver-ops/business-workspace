@@ -70,7 +70,7 @@ const groupIcons: Record<string, string> = {
   Commerce: 'ShoppingBag',
 };
 const getTool = (id: string) => tools.find((t) => t.id === id)!;
-type State = { user: User; records: Item[]; checks: Check[] };
+type State = { user: User; records: Item[]; checks: Check[]; storage?: string };
 function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
   const [mode, setMode] = useState('register'),
     [name, setName] = useState(''),
@@ -135,7 +135,7 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
             </span>
           </div>
         </div>
-        <small>Development release · Your data is stored on this server.</small>
+        <small>Development release · Private workspace storage.</small>
       </section>
       <section className="auth-form">
         <div className="auth-form-inner">
@@ -684,7 +684,7 @@ function App() {
                   <section className="recent-panel">
                     <div className="section-heading">
                       <h2>Recently worked on</h2>
-                      <span className="small muted">Saved on this server</span>
+                      <span className="small muted">Private workspace records</span>
                     </div>
                     {active.length ? (
                       <div className="recent-list">
@@ -1202,7 +1202,7 @@ function App() {
               </div>
               <div>
                 <dt>Storage</dt>
-                <dd>Local server database</dd>
+                <dd>{state.storage || 'Workspace database'}</dd>
               </div>
               <div>
                 <dt>Billing</dt>
