@@ -25,3 +25,5 @@ No real customer records, account databases, payment credentials or API keys are
 ## Professional workflow upgrade checks — 2026-11-03
 
 Production build and TypeScript checks passed. Default tests: 27 passed, one DynamoDB suite skipped. The explicit DynamoDB Local integration run passed all 28 tests, including account isolation, concurrent writes, expiring/revoked links, single-response enforcement and password-session invalidation. Premium static design audit reported zero findings. Public deployment checks follow publication; these local checks do not claim visual browser or live payment verification.
+
+Live deployment 0c4d242: readiness, homepage, robots and sitemap returned HTTP 200; unauthenticated workspace state returned 401. Remote browser inspection confirmed desktop and 390px mobile layouts and seven toolkit categories. Two findings were corrected afterward: auth mode links now navigate to the matching URL, and auth hero text has explicit spacing. No production account or customer data was submitted during inspection.

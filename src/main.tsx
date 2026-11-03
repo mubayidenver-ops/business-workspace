@@ -78,7 +78,7 @@ const groupIcons: Record<string, string> = {
 const getTool = (id: string) => tools.find((t) => t.id === id)!;
 type State = { user: User; records: Item[]; checks: Check[]; storage?: string };
 function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
-  const [mode, setMode] = useState(
+  const [mode] = useState(
       new URLSearchParams(location.search).get('auth') === 'login' ? 'login' : 'register',
     ),
     [name, setName] = useState(''),
@@ -121,8 +121,7 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
         <div className="auth-pitch">
           <span className="eyebrow">LESS SWITCHING. MORE DOING.</span>
           <h1>
-            Your business.
-            <br />
+            Your business. <br />
             All together.
           </h1>
           <p>A home for your clients, your ideas, and the work that moves you forward.</p>
@@ -216,15 +215,12 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
           </form>
           <p className="auth-switch">
             {mode === 'register' ? 'Already have a workspace?' : 'New here?'}{' '}
-            <button
+            <a
               className="link-button"
-              onClick={() => {
-                setMode(mode === 'register' ? 'login' : 'register');
-                setError('');
-              }}
+              href={mode === 'register' ? '/?auth=login' : '/?auth=register'}
             >
               {mode === 'register' ? 'Sign in' : 'Create workspace'}
-            </button>
+            </a>
           </p>
           <div className="auth-note">
             <Icons.LockKeyhole size={17} />
