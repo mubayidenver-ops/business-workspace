@@ -1,5 +1,7 @@
 # Business Workspace
 
+Designed by **lordyvites** · [GitHub profile](https://github.com/mubayidenver-ops).
+
 A connected workbench for independent businesses, with 30 module workspaces for clients, operations, files, content, learning, commerce and websites.
 
 **Development release.** Real local accounts and persistent records, working file utilities and bounded website checks. Billing, public portals and automatic media/AI providers are not connected. See [exact capability status](docs/release-status.md) before using the app.

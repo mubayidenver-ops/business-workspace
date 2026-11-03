@@ -14,6 +14,7 @@ import type { Tool, Item, User, Check } from './types';
 import { api, date, download, money, today } from './lib';
 import { Empty, Modal, RecordEditor, SearchBox } from './ui';
 import { Workbench } from './Workbench';
+import { DesignerCredit } from './DesignerCredit';
 import './styles.css';
 const tools = registry as Tool[];
 const icons: Record<
@@ -221,6 +222,7 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
             <Icons.LockKeyhole size={17} />
             <span>No credit card needed. Paid services are not enabled in this release.</span>
           </div>
+          <DesignerCredit />
         </div>
       </section>
     </main>
@@ -1108,7 +1110,7 @@ function App() {
                 <Icons.Boxes size={15} />
                 Business Workspace
               </span>
-              <span>Good things happen when work comes together.</span>
+              <DesignerCredit />
             </footer>
           </main>
         </div>

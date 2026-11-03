@@ -70,6 +70,8 @@ SearchBox, Modal, RecordEditor, Empty and Workbench are canonical primitives. Na
 
 ## Motion
 
+The shared DesignerCredit badge is visible on authentication and workspace pages, including mobile. It opens an accessible profile dialog with the supplied designer name, connected GitHub identity and confirmed project details. It uses the existing brand, surface and accent tokens; it does not include inferred personal information or workspace account data.
+
 150ms colour and border changes; no entrance choreography. Reduced motion disables animation and transitions. Scrollbars remain visible with normal, hover, active and forced-colours behavior.
 
 ## Do's and Don'ts
