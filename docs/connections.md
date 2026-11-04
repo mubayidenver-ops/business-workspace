@@ -21,3 +21,30 @@ Render background workers use paid compute. The free web deployment can continue
 | Team, account recovery and files       | Workspace roles, authenticator recovery codes and small attachments are available.                                                   | Verified email reset flow and private storage for larger files.                                                                                                                                        |
 
 The status panel uses runtime configuration for Paynow, AI and email. A configured provider can still reject a request. Keep credentials in the hosting environment and use the provider's supported test environment for integration tests.
+
+## Gmail invoice reminder test
+
+Business Workspace can use the Gmail API for a test in the sender mailbox. Use a
+Desktop app OAuth client in a Google Cloud project with the Gmail API enabled.
+If the project is in Testing, add the sender Gmail account as a test user.
+Download the client JSON outside the repository. From the repository root, run
+the helper with an output path in a private folder outside the repository.
+
+```powershell
+node scripts/authorize-gmail.mjs "$env:USERPROFILE\Downloads\client_secret.json" "$env:USERPROFILE\gmail-reminder-token.env"
+```
+
+Open the printed URL, sign in as the sender, and grant the send-only permission.
+Set these values in the Render service environment.
+
+- `INVOICE_REMINDER_PROVIDER=gmail`
+- `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET` from the downloaded JSON
+- `GMAIL_REFRESH_TOKEN` from the helper output file
+- `REMINDER_FROM_EMAIL` set to the bare sender Gmail address
+- `INVOICE_REMINDER_WORKSPACES` set to the test workspace ID
+
+After redeploying, create a new active, unpaid invoice due today, set the
+recipient to the sender mailbox, and enable email reminders. Check the job
+history and the sender mailbox after the next scheduled run. Keep the credentials
+out of Git and chat. External Google projects in Testing generally issue Gmail
+refresh tokens that expire in seven days. See [Google token expiry](https://developers.google.com/identity/protocols/oauth2#expiration).
