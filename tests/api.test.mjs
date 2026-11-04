@@ -876,3 +876,51 @@ test('MFA enrolment invalidates old sessions and rejects reused codes', async ()
   assert.equal((await req('/state', 'GET', undefined, cookie)).status, 401);
   assert.ok((await login()).cookie);
 });
+
+test('owner imports are atomic, repeatable and safe draft copies', async () => {
+  const record = {
+    module: 'projects',
+    title: 'Restored project',
+    status: 'Active',
+    user_id: 'untrusted-owner',
+    id: 'untrusted-id',
+    data: { amount: '25', clientResponse: 'forged' },
+  };
+  const invoice = {
+    module: 'invoices',
+    title: 'Restored invoice',
+    data: { client: 'Client', amount: '20', emailReminder: true, email: 'client@example.com' },
+  };
+  const requestKey = '094f50c3-7b28-4217-8d4b-9216405dd872';
+  const payload = { requestKey, records: [record, invoice] };
+  assert.equal((await req('/import', 'POST', payload)).status, 401);
+  assert.equal(
+    (
+      await req(
+        '/import',
+        'POST',
+        { ...payload, records: [record, { ...record, module: ['projects'] }] },
+        cookieA,
+      )
+    ).status,
+    400,
+  );
+  assert.ok(
+    !(await req('/state', 'GET', undefined, cookieA)).data.records.some(
+      (r) => r.title === record.title,
+    ),
+  );
+  const attempts = await Promise.all([
+    req('/import', 'POST', payload, cookieA),
+    req('/import', 'POST', payload, cookieA),
+  ]);
+  assert.ok(attempts.every((r) => r.status === 201 && r.data.count === 2));
+  const state = (await req('/state', 'GET', undefined, cookieA)).data;
+  const copies = state.records.filter((r) => r.title.startsWith('Restored '));
+  assert.equal(copies.length, 2);
+  assert.ok(
+    copies.every((r) => r.status === 'Draft' && r.user_id === state.user.id && r.id !== record.id),
+  );
+  assert.equal(copies.find((r) => r.module === 'invoices').data.emailReminder, false);
+  assert.equal(copies.find((r) => r.module === 'projects').data.clientResponse, undefined);
+});

@@ -26,3 +26,17 @@ export function checkInterval(record) {
     (record.module === 'uptime' ? Number(JSON.parse(record.data).intervalMinutes) || 5 : 5) * 60000
   );
 }
+
+export async function runMonitorCycle(store, check) {
+  let failures = 0;
+  for (const record of await store.monitors()) {
+    try {
+      const last = await store.latestCheck(record.user_id, record.id);
+      if (!last || Date.now() - Date.parse(last.created) >= checkInterval(record))
+        await check(record);
+    } catch {
+      failures++;
+    }
+  }
+  return failures;
+}

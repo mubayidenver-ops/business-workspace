@@ -1,3 +1,4 @@
+import { ImportPanel } from './ImportPanel';
 import { MfaPanel } from './MfaPanel';
 import React, {
   useEffect,
@@ -1512,6 +1513,9 @@ function App() {
           onClose={() => setPanel('settings')}
         />
       )}
+      {panel === 'import' && isOwner && (
+        <ImportPanel tools={tools} close={() => setPanel('settings')} refresh={refresh} />
+      )}
       {panel === 'settings' && (
         <Modal title="Workspace settings" onClose={() => setPanel('')}>
           <div className="modal-body">
@@ -1581,6 +1585,11 @@ function App() {
                 <Icons.Download size={16} />
                 Download backup
               </button>
+              {isOwner && (
+                <button onClick={() => setPanel('import')}>
+                  <Icons.Upload size={16} /> Import backup records
+                </button>
+              )}
               <button
                 onClick={async () => {
                   try {

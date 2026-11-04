@@ -402,15 +402,18 @@ export class DynamoStore {
       return { items, increment: 1, result: { record: r, replayed: false } };
     });
   }
-  async createBookingSeries(userId, inputs, key, hash) {
+  async createRecordBatch(userId, inputs, key, hash) {
     return this.mutate(userId, async ({ records }) => {
       const request = await this.get(workspace(userId), 'REQUEST#' + key);
-      if (replayRequest(request, hash, records)) return { result: undefined };
+      if (request) {
+        const previous = await this.getRecord(userId, request.record_id);
+        if (replayRequest(request, hash, previous ? [previous] : [])) return { result: undefined };
+      }
       const items = [];
       const existing = [...records];
       let first;
       for (const input of inputs) {
-        const record = makeRecord(userId, 'booking', input, existing);
+        const record = makeRecord(userId, input.module, input, existing);
         existing.push(record);
         first ||= record;
         items.push(...this.recordWrites(record));

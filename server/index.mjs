@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
 import { safeFetch } from './network.mjs';
-import { checkInterval } from './uptime.mjs';
+import { runMonitorCycle } from './uptime.mjs';
 import { registrationExpiry } from './rdap.mjs';
 import { aiConfig, draftRecord } from './ai-drafts.mjs';
 import { reminderConfig, sendInvoiceReminders } from './invoice-reminders.mjs';
@@ -585,6 +585,37 @@ const server = createServer(async (req, res) => {
       }
       return;
     }
+    if (url.pathname === '/api/import' && req.method === 'POST') {
+      rate('import:' + actor.id, 30);
+      const { records, requestKey } = await body(req);
+      if (
+        !Array.isArray(records) ||
+        records.length < 1 ||
+        records.length > 20 ||
+        typeof requestKey !== 'string' ||
+        !/^[a-f0-9-]{36}$/i.test(requestKey)
+      )
+        throw fail(400, 'Select 1 to 20 records to import.');
+      const batch = records.map((record, index) => {
+        try {
+          const data = { ...record?.data, emailReminder: false };
+          return {
+            ...validateRecord(record?.module, { title: record?.title, status: 'Draft', data }),
+            module: record.module,
+          };
+        } catch (error) {
+          throw fail(400, 'Record ' + (index + 1) + ': ' + error.message);
+        }
+      });
+      await store.createRecordBatch(
+        user.id,
+        batch,
+        requestKey,
+        sessionHash(JSON.stringify({ kind: 'import', batch })),
+      );
+      json(res, 201, { count: batch.length });
+      return;
+    }
     if (url.pathname === '/api/booking-series' && req.method === 'POST') {
       rate('booking-series:' + actor.id, 10);
       const input = await body(req);
@@ -612,12 +643,12 @@ const server = createServer(async (req, res) => {
           });
           if (Date.parse(record.data.start) <= Date.now())
             throw new Error('All slots must start in the future.');
-          return record;
+          return { ...record, module: 'booking' };
         });
       } catch (error) {
         throw fail(400, error.message);
       }
-      await store.createBookingSeries(
+      await store.createRecordBatch(
         user.id,
         records,
         input.requestKey,
@@ -911,11 +942,9 @@ const interval = setInterval(async () => {
   try {
     await store.cleanup();
     for (const [key, value] of rates) if (value.until < Date.now()) rates.delete(key);
-    const monitors = await store.monitors();
-    for (const r of monitors) {
-      const last = await store.latestCheck(r.user_id, r.id);
-      if (!last || Date.now() - Date.parse(last.created) >= checkInterval(r)) await check(r);
-    }
+    const failures = await runMonitorCycle(store, check);
+    if (failures)
+      console.error(`${failures} monitor checks failed and will retry on the next cycle.`);
   } catch (e) {
     console.error('Scheduled checks will retry on the next cycle.');
   } finally {

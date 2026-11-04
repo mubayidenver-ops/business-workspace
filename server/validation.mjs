@@ -3,7 +3,7 @@ import { validateAttachment } from './attachments.mjs';
 import { byId, statuses } from '../shared/tools.mjs';
 import { calculateDocument } from '../shared/pricing.mjs';
 export function validateRecord(module, input) {
-  const tool = Object.hasOwn(byId, module) ? byId[module] : null;
+  const tool = typeof module === 'string' && Object.hasOwn(byId, module) ? byId[module] : null;
   if (!tool) throw new Error('Unknown tool.');
   let pricing;
   if (['proposals', 'invoices'].includes(module) && input.data?.lineItems) {

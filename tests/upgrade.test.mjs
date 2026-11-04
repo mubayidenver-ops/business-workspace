@@ -232,3 +232,27 @@ test('authenticator matches the RFC 6238 SHA-1 vector and rejects replay', async
   assert.equal(matchStep(secret, '287082', -1, 59000), 1);
   assert.equal(matchStep(secret, '287082', 1, 59000), null);
 });
+
+test('a failed scheduled check does not suppress later monitors', async () => {
+  const { runMonitorCycle } = await import('../server/uptime.mjs');
+  const monitors = ['failed', 'later', 'recent'].map((id) => ({
+    id,
+    user_id: 'owner',
+    module: 'uptime',
+    data: '{}',
+  }));
+  const checked = [];
+  const count = await runMonitorCycle(
+    {
+      monitors: async () => monitors,
+      latestCheck: async (_owner, id) =>
+        id === 'recent' ? { created: new Date().toISOString() } : null,
+    },
+    async (record) => {
+      checked.push(record.id);
+      if (record.id === 'failed') throw new Error('Storage unavailable');
+    },
+  );
+  assert.equal(count, 1);
+  assert.deepEqual(checked, ['failed', 'later']);
+});

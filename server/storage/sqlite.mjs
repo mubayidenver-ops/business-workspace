@@ -240,7 +240,7 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       throw e;
     }
   }
-  async createBookingSeries(userId, inputs, key, hash) {
+  async createRecordBatch(userId, inputs, key, hash) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const records = this.records(userId);
@@ -253,7 +253,7 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
         );
         let first;
         for (const input of inputs) {
-          const record = makeRecord(userId, 'booking', input, records);
+          const record = makeRecord(userId, input.module, input, records);
           records.push(record);
           first ||= record;
           insert.run(
