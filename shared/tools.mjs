@@ -105,6 +105,12 @@ export const tools = [
     fields: [
       f('client', 'Client', 'text', true),
       f('reference', 'Invoice reference'),
+      f('email', 'Client email for reminders', 'email'),
+      f(
+        'emailReminder',
+        'Send one email reminder for this due date (when enabled for your workspace)',
+        'checkbox',
+      ),
       f('pauseReminders', 'Pause due reminders', 'checkbox'),
       f('amount', 'Invoice amount', 'number', true),
       f('paid', 'Amount received', 'number'),
@@ -114,7 +120,7 @@ export const tools = [
       f('notes', 'Payment and follow-up notes', 'textarea'),
     ],
     integration:
-      'Record payments manually. Reminders stay in-app; automatic email and payment collection are not connected.',
+      'Record payments manually. An enabled workspace can email one reminder per due date for active, unpaid invoices with consent.',
   },
   {
     id: 'proposals',
@@ -139,14 +145,15 @@ export const tools = [
     description: 'Make room for your next conversation.',
     unit: 'appointment',
     fields: [
-      f('client', 'Attendee', 'text', true),
+      f('client', 'Attendee or slot label', 'text', true),
+      f('offerSlot', 'Offer this slot through a private booking link', 'checkbox'),
       f('start', 'Starts at', 'datetime-local', true),
       f('end', 'Ends at', 'datetime-local', true),
       f('bufferMinutes', 'Buffer after appointment (0–120 minutes)', 'number'),
       f('notes', 'Meeting details', 'textarea'),
     ],
     integration:
-      'Internal calendar with conflict detection, using the time zone of the person creating the booking. Public booking pages and calendar sync are not connected.',
+      'Reserve an active slot and share an expiring booking link. Each slot accepts one guest; times display in the viewer’s local time zone.',
   },
   {
     id: 'projects',
@@ -381,7 +388,7 @@ export const tools = [
       f('notes', 'Product description', 'textarea'),
     ],
     integration:
-      'Prepare your product listings. Paynow currently handles Workspace Pro access; product checkout and download delivery are separate.',
+      'Attach a small digital file and share an expiring delivery link. For paid products, confirm payment separately before sending the link.',
   },
   {
     id: 'licences',

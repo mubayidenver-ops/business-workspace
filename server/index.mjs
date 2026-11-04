@@ -7,8 +7,15 @@ import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
 import { safeFetch } from './network.mjs';
 import { checkInterval } from './uptime.mjs';
+import { reminderConfig, sendInvoiceReminders } from './invoice-reminders.mjs';
 import { crawlLinks, comparePage } from './website-checks.mjs';
-import { assertShareable, publicProjection, clientResponse } from './public-sharing.mjs';
+import {
+  assertShareable,
+  publicProjection,
+  clientResponse,
+  assertBookable,
+  collectionModules,
+} from './public-sharing.mjs';
 import { Billing } from './billing.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -235,10 +242,29 @@ const server = createServer(async (req, res) => {
       const record = await store.getRecord(share.user_id, share.record_id);
       if (!record || record.archived || record.version !== share.recordVersion)
         throw fail(410, 'The owner updated this document. Ask for a new link.');
+      if (record.module === 'booking') assertBookable(record);
       if (req.method === 'GET') {
         const last =
           record.module === 'uptime' ? await store.latestCheck(share.user_id, record.id) : null;
-        json(res, 200, publicProjection(record, share, last));
+        const projection = publicProjection(record, share, last);
+        if (share.collection?.length) {
+          const entries = await Promise.all(
+            share.collection.map((entry) => store.getRecord(share.user_id, entry.id)),
+          );
+          if (
+            entries.some(
+              (entry, index) =>
+                !entry ||
+                entry.archived ||
+                entry.status === 'Cancelled' ||
+                entry.module !== record.module ||
+                entry.version !== share.collection[index].version,
+            )
+          )
+            throw fail(410, 'This collection was updated. Ask its owner for a fresh link.');
+          projection.entries = entries.map((entry) => publicProjection(entry, share));
+        }
+        json(res, 200, projection);
         return;
       }
       if (req.method === 'POST') {
@@ -247,9 +273,18 @@ const server = createServer(async (req, res) => {
           throw fail(409, 'This document changed. Reload before responding.');
         const response = clientResponse(record, input);
         const data = { ...JSON.parse(record.data), clientResponse: JSON.stringify(response) };
+        if (response.action === 'book') {
+          data.client = response.name;
+          data.offerSlot = false;
+        }
         await store.respondToShare(hash, record.version, {
           data: JSON.stringify(data),
-          status: response.action === 'approve' ? 'Completed' : 'In review',
+          status:
+            response.action === 'book'
+              ? 'Active'
+              : response.action === 'approve'
+                ? 'Completed'
+                : 'In review',
         });
         json(res, 200, { received: true, action: response.action });
         return;
@@ -383,11 +418,39 @@ const server = createServer(async (req, res) => {
             throw fail(400, 'Confirm that this document may be shared before creating a link.');
           if (b.version !== r.version)
             throw fail(409, 'This record changed. Refresh before sharing.');
+          let collection;
+          if (b.collection !== undefined) {
+            if (
+              !collectionModules.includes(r.module) ||
+              !Array.isArray(b.collection) ||
+              b.collection.length > 12 ||
+              b.collection.some(
+                (id) => typeof id !== 'string' || !/^[a-f0-9-]{36}$/i.test(id) || id === r.id,
+              ) ||
+              new Set(b.collection).size !== b.collection.length
+            )
+              throw fail(400, 'Choose up to 12 additional records of the same type.');
+            const entries = await Promise.all(
+              b.collection.map((id) => store.getRecord(user.id, id)),
+            );
+            if (
+              entries.some(
+                (entry) =>
+                  !entry ||
+                  entry.module !== r.module ||
+                  entry.archived ||
+                  entry.status === 'Cancelled',
+              )
+            )
+              throw fail(400, 'One or more records cannot be included.');
+            collection = entries.map((entry) => ({ id: entry.id, version: entry.version }));
+          }
           const days = Number(b.days ?? 7);
           if (![1, 7, 30].includes(days)) throw fail(400, 'Choose a supported link expiry.');
           const token = randomBytes(32).toString('hex');
           const quoteExpiry = r.module === 'proposals' && JSON.parse(r.data).due;
           const expires = Math.min(
+            r.module === 'booking' ? Date.parse(JSON.parse(r.data).start) : Infinity,
             Date.now() + days * 86400000,
             quoteExpiry ? Date.parse(quoteExpiry + 'T00:00:00Z') + 86400000 : Infinity,
           );
@@ -399,6 +462,7 @@ const server = createServer(async (req, res) => {
             record_id: r.id,
             brand: user.name,
             recordVersion: r.version,
+            ...(collection?.length ? { collection } : {}),
             expires,
           });
           json(res, 201, { token, expires });
@@ -492,7 +556,19 @@ server.listen(port, process.env.HOST || '127.0.0.1', () =>
   console.log(`Business Workspace: http://localhost:${server.address().port}`),
 );
 let scheduled = false;
+let reminderRunning = false;
+let nextReminderCycle = 0;
+const invoiceMail = reminderConfig();
 const interval = setInterval(async () => {
+  if (invoiceMail && !reminderRunning && Date.now() >= nextReminderCycle) {
+    reminderRunning = true;
+    nextReminderCycle = Date.now() + 15 * 60000;
+    void sendInvoiceReminders(store, invoiceMail)
+      .catch(() => console.error('Invoice reminder processing failed.'))
+      .finally(() => {
+        reminderRunning = false;
+      });
+  }
   if (scheduled) return;
   scheduled = true;
   try {

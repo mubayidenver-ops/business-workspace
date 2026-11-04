@@ -148,7 +148,9 @@ export function RecordEditor({
             taxPercent: item?.data.taxPercent || '0',
           }
         : {}),
-      ...(tool.id === 'approvals' ? { attachment: item?.data.attachment || '' } : {}),
+      ...(['approvals', 'store'].includes(tool.id)
+        ? { attachment: item?.data.attachment || '' }
+        : {}),
     } as Record<string, string | boolean>,
   });
   const [form, setForm] = useState(initial);
@@ -320,7 +322,7 @@ export function RecordEditor({
             {['proposals', 'invoices'].includes(tool.id) && (
               <FinancialEditor data={form.data} onChange={(data) => setForm({ ...form, data })} />
             )}
-            {tool.id === 'approvals' && (
+            {['approvals', 'store'].includes(tool.id) && (
               <AttachmentField
                 value={String(form.data.attachment || '')}
                 disabled={busy}

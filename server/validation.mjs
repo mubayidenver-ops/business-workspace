@@ -27,7 +27,8 @@ export function validateRecord(module, input) {
     throw new Error('Enter a title of 1–180 characters.');
   if (!statuses.includes(input.status)) throw new Error('Choose a valid status.');
   const data = {};
-  if (module === 'approvals') data.attachment = validateAttachment(input.data?.attachment);
+  if (['approvals', 'store'].includes(module))
+    data.attachment = validateAttachment(input.data?.attachment);
   if (pricing) {
     data.lineItems = JSON.stringify(
       pricing.lines.map(({ description, quantity, rate }) => ({ description, quantity, rate })),
@@ -97,6 +98,8 @@ export function validateRecord(module, input) {
     throw new Error('The appointment must end after it starts.');
   if (module === 'clips' && Number(data.to) <= Number(data.from))
     throw new Error('The clip must end after it starts.');
+  if (module === 'invoices' && data.emailReminder && (!data.email || !data.due))
+    throw new Error('Enter a client email and due date to enable an email reminder.');
   if (module === 'invoices' && Number(data.paid) > Number(data.amount))
     throw new Error('Amount received cannot exceed the invoice amount.');
   if (data.currency) {

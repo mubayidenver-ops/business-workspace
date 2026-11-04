@@ -96,3 +96,58 @@ test('booking buffers protect the slot with legacy unbuffered records', () => {
   assert.throws(() => assertBooking([first], booking('b', '09:10', '10:00')), /overlaps/);
   assert.doesNotThrow(() => assertBooking([first], booking('b', '09:15', '10:00')));
 });
+
+test('invoice reminders require opt-in, skip paid or paused invoices, and claim one delivery', async () => {
+  const { sendInvoiceReminders } = await import('../server/invoice-reminders.mjs');
+  const now = Date.parse('2026-11-04T08:00:00Z');
+  const data = {
+    client: 'Client',
+    amount: '100',
+    paid: '20',
+    currency: 'USD',
+    due: '2026-11-04',
+    email: 'client@example.com',
+    emailReminder: true,
+  };
+  const rows = [
+    { id: 'send', overrides: {} },
+    { id: 'paid', overrides: { paid: '100' } },
+    { id: 'paused', overrides: { pauseReminders: true } },
+    { id: 'unapproved', overrides: { emailReminder: false } },
+  ].map(({ id, overrides }) => ({
+    id,
+    user_id: 'owner',
+    version: 1,
+    module: 'invoices',
+    status: 'Active',
+    title: 'Invoice',
+    data: JSON.stringify({ ...data, ...overrides }),
+  }));
+  const claimed = new Set();
+  const store = {
+    invoiceReminders: async () => rows,
+    getRecord: async (_owner, id) => rows.find((row) => row.id === id),
+    claimInvoiceReminder: async (_owner, key) => {
+      if (claimed.has(key)) return false;
+      claimed.add(key);
+      return true;
+    },
+    finishInvoiceReminder: async () => {},
+  };
+  const messages = [];
+  const send = async (url, request) => {
+    assert.equal(url, 'https://api.resend.com/emails');
+    messages.push(request);
+    return new Response(null, { status: messages.length === 1 ? 503 : 200 });
+  };
+  const config = { key: 'test-key', from: 'invoices@example.com', allowed: new Set(['owner']) };
+  await Promise.all([
+    sendInvoiceReminders(store, config, send, now),
+    sendInvoiceReminders(store, config, send, now),
+  ]);
+  assert.equal(claimed.size, 1);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].headers['Idempotency-Key'], messages[1].headers['Idempotency-Key']);
+  assert.equal(messages[0].body, messages[1].body);
+  assert.match(JSON.parse(messages[0].body).text, /80\.00/);
+});

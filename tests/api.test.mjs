@@ -584,3 +584,111 @@ test('quote revision history preserves the saved totals and stays private', asyn
     [['Original quote', 1, '100']],
   );
 });
+test('an offered appointment admits one guest and keeps its time reserved', async () => {
+  const start = new Date(Date.now() + 86400000).toISOString();
+  const end = new Date(Date.parse(start) + 3600000).toISOString();
+  const input = {
+    module: 'booking',
+    title: 'Consultation',
+    status: 'Active',
+    data: {
+      client: 'Available slot',
+      offerSlot: true,
+      start,
+      end,
+      notes: 'Private note',
+    },
+  };
+  const created = await req('/records', 'POST', input, cookieA);
+  assert.equal(created.status, 201);
+  const id = created.data.id;
+  const shared = await req(
+    '/records/' + id + '/share',
+    'POST',
+    { version: 1, days: 7, confirmed: true },
+    cookieA,
+  );
+  assert.equal(shared.status, 201);
+  assert.equal(shared.data.expires, Date.parse(start));
+  const link = await guest(shared.data.token);
+  assert.deepEqual(link.data.data, { start, end });
+  const [first, second] = await Promise.all(
+    ['Guest A', 'Guest B'].map((name) =>
+      guest(shared.data.token, 'POST', { version: 1, name, email: 'guest@example.com' }),
+    ),
+  );
+  assert.equal([first, second].filter((r) => r.status === 200).length, 1);
+  assert.equal((await guest(shared.data.token)).status, 410);
+  assert.equal((await req('/records', 'POST', input, cookieA)).status, 409);
+  const state = await req('/state', 'GET', undefined, cookieA);
+  const booking = state.data.records.find((r) => r.id === id);
+  assert.equal(booking.status, 'Active');
+  assert.equal(booking.data.offerSlot, false);
+  assert.equal(JSON.parse(booking.data.clientResponse).email, 'guest@example.com');
+});
+
+test('shared collections accept only selected workspace records and expire on revision', async () => {
+  const create = (title, cookie) =>
+    req(
+      '/records',
+      'POST',
+      {
+        module: 'help',
+        title,
+        status: 'Active',
+        data: { category: 'Guides', notes: 'Instructions' },
+      },
+      cookie,
+    );
+  const owner = await create('First guide', cookieA);
+  const related = await create('Related guide', cookieA);
+  const other = await req('/auth', 'POST', {
+    mode: 'login',
+    email: 'b@example.com',
+    password: 'unique-password-b',
+  });
+  const foreign = await create('Other workspace guide', other.cookie);
+  assert.equal(foreign.status, 201);
+  const route = '/records/' + owner.data.id + '/share';
+  const share = (id) =>
+    req(route, 'POST', { version: 1, days: 1, confirmed: true, collection: [id] }, cookieA);
+  assert.equal((await share(foreign.data.id)).status, 400);
+  const accepted = await share(related.data.id);
+  assert.equal(accepted.status, 201);
+  const projection = await guest(accepted.data.token);
+  assert.equal(projection.data.entries[0].title, 'Related guide');
+  assert.ok(!Object.hasOwn(projection.data.entries[0], 'user_id'));
+  assert.equal(
+    (await req('/records/' + related.data.id, 'PATCH', { version: 1, archived: true }, cookieA))
+      .status,
+    200,
+  );
+  assert.equal((await guest(accepted.data.token)).status, 410);
+});
+
+test('digital delivery only exposes a selected file through an expiring link', async () => {
+  const attachment = JSON.stringify({
+    name: 'guide.pdf',
+    mime: 'application/pdf',
+    content: Buffer.from('%PDF-1.4').toString('base64'),
+  });
+  const created = await req(
+    '/records',
+    'POST',
+    {
+      module: 'store',
+      title: 'Guide',
+      status: 'Active',
+      data: { amount: '10', currency: 'USD', notes: 'Product', attachment },
+    },
+    cookieA,
+  );
+  assert.equal(created.status, 201);
+  const route = '/records/' + created.data.id + '/share';
+  const shared = await req(route, 'POST', { version: 1, confirmed: true }, cookieA);
+  assert.equal(shared.status, 201);
+  const projection = await guest(shared.data.token);
+  assert.deepEqual(projection.data.data, { notes: 'Product', attachment });
+  assert.equal((await req(route, 'DELETE', {}, cookieA)).status, 200);
+  assert.equal((await guest(shared.data.token)).status, 410);
+});

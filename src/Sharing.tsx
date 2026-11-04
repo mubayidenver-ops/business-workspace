@@ -26,8 +26,28 @@ export const canShare = (id: string) =>
     'testimonials',
     'uptime',
     'podcasts',
+    'booking',
+    'store',
   ].includes(id);
-export function ShareModal({ record, onClose }: { record: Item; onClose: () => void }) {
+export function ShareModal({
+  record,
+  related = [],
+  onClose,
+}: {
+  record: Item;
+  related?: Item[];
+  onClose: () => void;
+}) {
+  const [collection, setCollection] = useState<string[]>([]);
+  const candidates = ['help', 'portfolio', 'catalogues'].includes(record.module)
+    ? related.filter(
+        (entry) =>
+          entry.id !== record.id &&
+          entry.module === record.module &&
+          !entry.archived &&
+          entry.status !== 'Cancelled',
+      )
+    : [];
   const [meta, setMeta] = useState<{ active: boolean; expires?: number } | null>(null),
     [token, setToken] = useState(''),
     [days, setDays] = useState('7'),
@@ -58,7 +78,12 @@ export function ShareModal({ record, onClose }: { record: Item; onClose: () => v
       const result = await api<{ token: string; expires: number }>(
         '/records/' + record.id + '/share',
         'POST',
-        { version: record.version, days: Number(days), confirmed },
+        {
+          version: record.version,
+          days: Number(days),
+          confirmed,
+          ...(collection.length ? { collection } : {}),
+        },
       );
       setToken(result.token);
       setMeta({ active: true, expires: result.expires });
@@ -98,13 +123,13 @@ export function ShareModal({ record, onClose }: { record: Item; onClose: () => v
           <div>
             <h3>{record.title}</h3>
             <p className="muted small">
-              A private link to one document. Your workspace stays private.
+              Share this record and any additional records you select below.
             </p>
           </div>
         </div>
         <div className="notice">
           Anyone with this link can view the shared content
-          {['proposals', 'approvals', 'onboarding'].includes(record.module)
+          {['proposals', 'approvals', 'onboarding', 'booking'].includes(record.module)
             ? ' and submit one response'
             : ''}
           . Only share details you intend the recipient to see. Editing the document invalidates its
@@ -178,6 +203,30 @@ export function ShareModal({ record, onClose }: { record: Item; onClose: () => v
                 <option value="30">30 days</option>
               </select>
             </label>
+            {candidates.length > 0 && (
+              <fieldset>
+                <legend>Include more records (up to 12)</legend>
+                {candidates.map((entry) => (
+                  <label className="inline-check" key={entry.id}>
+                    <input
+                      type="checkbox"
+                      checked={collection.includes(entry.id)}
+                      disabled={busy || (!collection.includes(entry.id) && collection.length >= 12)}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setCollection((previous) =>
+                          checked
+                            ? [...previous, entry.id]
+                            : previous.filter((id) => id !== entry.id),
+                        );
+                        setConfirmed(false);
+                      }}
+                    />
+                    {entry.title}
+                  </label>
+                ))}
+              </fieldset>
+            )}
             <label className="inline-check">
               <input
                 type="checkbox"
@@ -222,6 +271,7 @@ type PublicData = {
   expires: number;
   data: Record<string, string | boolean>;
   document?: Parameters<typeof DocumentView>[0]['document'];
+  entries?: PublicData[];
   check?: { created: string; ok: boolean; status?: number; ms?: number } | null;
 };
 export function PublicPage({ token }: { token: string }) {
@@ -235,6 +285,7 @@ export function PublicPage({ token }: { token: string }) {
     [answers, setAnswers] = useState<string[]>([]),
     [action, setAction] = useState('approve'),
     [done, setDone] = useState(false);
+  const [collectionQuery, setCollectionQuery] = useState('');
   const form = useRef<HTMLFormElement>(null);
   const questions =
     page?.module === 'onboarding'
@@ -309,7 +360,17 @@ export function PublicPage({ token }: { token: string }) {
       setBusy(false);
     }
   }
-  const interactive = page && ['proposals', 'approvals', 'onboarding'].includes(page.module);
+  const visibleEntries = page?.entries
+    ? [page, ...page.entries].filter((entry) =>
+        [entry.title, entry.data.category, entry.data.notes, entry.data.client].some((value) =>
+          String(value || '')
+            .toLowerCase()
+            .includes(collectionQuery.trim().toLowerCase()),
+        ),
+      )
+    : [];
+  const interactive =
+    page && ['proposals', 'approvals', 'onboarding', 'booking'].includes(page.module);
   return (
     <main className="public-shell">
       <header className="public-top">
@@ -335,7 +396,11 @@ export function PublicPage({ token }: { token: string }) {
         <section className="public-complete">
           <CheckCircle2 size={48} />
           <h1>Thank you, {name}.</h1>
-          <p>Your response has been recorded for {page.brand}.</p>
+          <p>
+            {page.module === 'booking'
+              ? 'Your appointment is confirmed.'
+              : 'Your response has been recorded for ' + page.brand + '.'}
+          </p>
           <p className="muted">This link has now closed to further responses.</p>
           <a className="button-link" href="/">
             Discover Business Workspace
@@ -345,7 +410,44 @@ export function PublicPage({ token }: { token: string }) {
       ) : (
         <div className="public-layout">
           <section className="public-content">
-            {['proposals', 'invoices'].includes(page.module) ? (
+            {page.entries?.length ? (
+              <article className="public-article">
+                <span className="eyebrow">{page.brand}</span>
+                <h1>
+                  {page.module === 'help'
+                    ? 'Help centre'
+                    : page.module === 'portfolio'
+                      ? 'Portfolio'
+                      : 'Catalogue'}
+                </h1>
+                <label>
+                  Search this collection
+                  <input
+                    type="search"
+                    value={collectionQuery}
+                    onChange={(event) => setCollectionQuery(event.target.value)}
+                  />
+                </label>
+                {!visibleEntries.length && <p className="muted">No matching records.</p>}
+                {visibleEntries.map((entry, index) => (
+                  <section key={index}>
+                    <h2>{entry.title}</h2>
+                    {entry.data.category && <p className="muted">{entry.data.category}</p>}
+                    <p className="preserve-lines">{String(entry.data.notes || '')}</p>
+                    {entry.data.amount && (
+                      <p className="public-price">
+                        {money(entry.data.amount, entry.data.currency)}
+                      </p>
+                    )}
+                    {entry.data.url && (
+                      <a href={String(entry.data.url)} rel="noopener noreferrer" target="_blank">
+                        Open item
+                      </a>
+                    )}
+                  </section>
+                ))}
+              </article>
+            ) : ['proposals', 'invoices'].includes(page.module) ? (
               <DocumentView
                 title={page.title}
                 brand={page.brand}
@@ -355,12 +457,17 @@ export function PublicPage({ token }: { token: string }) {
               />
             ) : (
               <article className="public-article">
-                {page.module === 'approvals' && (
+                {['approvals', 'store'].includes(page.module) && (
                   <AttachmentDownload value={String(page.data.attachment || '')} />
                 )}
                 <span className="eyebrow">{page.brand}</span>
                 <h1>{page.title}</h1>
-                {page.module === 'onboarding' ? (
+                {page.module === 'booking' ? (
+                  <p>
+                    {new Date(String(page.data.start)).toLocaleString()} to{' '}
+                    {new Date(String(page.data.end)).toLocaleString()} (your local time)
+                  </p>
+                ) : page.module === 'onboarding' ? (
                   <>
                     <p className="muted">Tell us about the work you have in mind.</p>
                     <p className="preserve-lines">
@@ -468,7 +575,7 @@ export function PublicPage({ token }: { token: string }) {
                     onChange={(e) => setName(e.target.value)}
                   />
                 </label>
-                {page.module === 'onboarding' ? (
+                {page.module === 'onboarding' || page.module === 'booking' ? (
                   <label>
                     Email address *
                     <input
@@ -534,11 +641,13 @@ export function PublicPage({ token }: { token: string }) {
                 <button type="submit" className="primary full" disabled={busy}>
                   {busy
                     ? 'Sending…'
-                    : page.module === 'onboarding'
-                      ? 'Send project brief'
-                      : action === 'approve'
-                        ? 'Record approval'
-                        : 'Send requested changes'}
+                    : page.module === 'booking'
+                      ? 'Confirm appointment'
+                      : page.module === 'onboarding'
+                        ? 'Send project brief'
+                        : action === 'approve'
+                          ? 'Record approval'
+                          : 'Send requested changes'}
                 </button>
               </form>
             </aside>

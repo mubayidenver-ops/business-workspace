@@ -1,6 +1,7 @@
 import { validateAttachment } from './attachments.mjs';
 import { storageError } from './storage/rules.mjs';
 import { documentFromData } from '../shared/pricing.mjs';
+export const collectionModules = ['help', 'portfolio', 'catalogues'];
 export const shareableModules = [
   'proposals',
   'approvals',
@@ -12,10 +13,15 @@ export const shareableModules = [
   'testimonials',
   'uptime',
   'podcasts',
+  'booking',
+  'store',
 ];
 export function assertShareable(record) {
   if (record.archived || record.status === 'Cancelled' || !shareableModules.includes(record.module))
     throw storageError(400, 'This record cannot be shared.');
+  if (record.module === 'booking') assertBookable(record);
+  if (record.module === 'store' && !JSON.parse(record.data).attachment)
+    throw storageError(400, 'Attach the digital file before creating a delivery link.');
   if (record.module === 'testimonials' && !JSON.parse(record.data).consent)
     throw storageError(400, 'Record permission to publish before sharing a testimonial.');
 }
@@ -39,6 +45,8 @@ export function publicProjection(record, share, latest = null) {
     testimonials: ['client', 'notes'],
     uptime: ['url'],
     podcasts: ['url', 'notes'],
+    booking: ['start', 'end'],
+    store: ['notes', 'attachment'],
   }[record.module];
   result.data = Object.fromEntries(fields.map((key) => [key, d[key] ?? '']));
   if (['proposals', 'invoices'].includes(record.module)) result.document = documentFromData(d);
@@ -62,8 +70,21 @@ export function clientResponse(record, input) {
       400,
       'Enter your name (up to 100 characters) and a message under 5,000 characters.',
     );
-  if (!['proposals', 'approvals', 'onboarding'].includes(record.module))
+  if (!['proposals', 'approvals', 'onboarding', 'booking'].includes(record.module))
     throw storageError(400, 'This page does not accept responses.');
+  if (record.module === 'booking') {
+    assertBookable(record);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)
+      throw storageError(400, 'Enter a valid email address to book this slot.');
+    return {
+      name,
+      email,
+      message,
+      action: 'book',
+      reviewedVersion: record.version,
+      created: new Date().toISOString(),
+    };
+  }
   const action = record.module === 'onboarding' ? 'brief' : input.action;
   if (
     !['brief', 'approve', 'changes'].includes(action) ||
@@ -107,4 +128,15 @@ export function clientResponse(record, input) {
     action,
     created: new Date().toISOString(),
   };
+}
+
+export function assertBookable(record) {
+  const data = JSON.parse(record.data);
+  if (
+    record.status !== 'Active' ||
+    data.offerSlot !== true ||
+    data.clientResponse ||
+    !(Date.parse(data.start) > Date.now())
+  )
+    throw storageError(410, 'This appointment is no longer available for booking.');
 }

@@ -22,6 +22,7 @@ import { BusinessInsights } from './BusinessInsights';
 import { PasswordModal } from './PasswordModal';
 import { BillingPanel } from './BillingPanel';
 import { CommandPalette } from './CommandPalette';
+import { downloadAppointment } from './calendar';
 import './styles.css';
 import './pro.css';
 const tools = registry as Tool[];
@@ -1058,15 +1059,18 @@ function App() {
                                 <td className="muted small">{date(r.updated)}</td>
                                 <td>
                                   <div className="row-actions">
-                                    {canShare(r.module) && !r.archived && (
-                                      <button
-                                        className="icon-button"
-                                        aria-label={'Share ' + r.title}
-                                        onClick={() => setSharing(r)}
-                                      >
-                                        <Icons.Share2 size={16} />
-                                      </button>
-                                    )}
+                                    {canShare(r.module) &&
+                                      !r.archived &&
+                                      (r.module !== 'booking' ||
+                                        (r.status === 'Active' && r.data.offerSlot)) && (
+                                        <button
+                                          className="icon-button"
+                                          aria-label={'Share ' + r.title}
+                                          onClick={() => setSharing(r)}
+                                        >
+                                          <Icons.Share2 size={16} />
+                                        </button>
+                                      )}
                                     {r.module === 'proposals' && (
                                       <button
                                         className="icon-button"
@@ -1094,6 +1098,18 @@ function App() {
                                         Reuse questions
                                       </button>
                                     )}
+                                    {r.module === 'booking' &&
+                                      r.status !== 'Cancelled' &&
+                                      !r.archived && (
+                                        <button
+                                          className="icon-button"
+                                          aria-label={'Download calendar event for ' + r.title}
+                                          title="Download calendar event"
+                                          onClick={() => downloadAppointment(r)}
+                                        >
+                                          <Icons.CalendarDays size={16} />
+                                        </button>
+                                      )}
                                     {r.module === 'podcasts' && (
                                       <button
                                         onClick={() =>
@@ -1292,7 +1308,9 @@ function App() {
           onSave={saved}
         />
       )}
-      {sharing && <ShareModal record={sharing} onClose={() => setSharing(null)} />}
+      {sharing && (
+        <ShareModal record={sharing} related={state.records} onClose={() => setSharing(null)} />
+      )}
       {archive && (
         <Modal
           title={archive.archived ? 'Restore record' : 'Archive record'}

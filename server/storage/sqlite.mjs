@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS votes(record_id TEXT NOT NULL REFERENCES records(id),
 CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL REFERENCES users(id),key TEXT NOT NULL,hash TEXT NOT NULL,record_id TEXT NOT NULL REFERENCES records(id),PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS shares(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,record_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS payments(reference TEXT PRIMARY KEY,user_id TEXT NOT NULL,version INTEGER NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS invoice_reminders(user_id TEXT NOT NULL, key TEXT NOT NULL, claimed INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS quote_revisions(user_id TEXT NOT NULL, record_id TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(user_id,record_id,version));
 CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
@@ -186,6 +187,25 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+  async invoiceReminders() {
+    return this.db
+      .prepare(
+        "SELECT id,user_id FROM records WHERE module='invoices' AND archived=0 AND status='Active' AND json_extract(data,'$.emailReminder')=1",
+      )
+      .all();
+  }
+  async claimInvoiceReminder(userId, key, now) {
+    return (
+      this.db
+        .prepare("INSERT OR IGNORE INTO invoice_reminders VALUES (?,?,?,'claimed')")
+        .run(userId, key, now).changes === 1
+    );
+  }
+  async finishInvoiceReminder(userId, key, status) {
+    this.db
+      .prepare('UPDATE invoice_reminders SET status=? WHERE user_id=? AND key=?')
+      .run(status, userId, key);
   }
   async monitors() {
     return this.db

@@ -1,3 +1,4 @@
+import { reminderCandidate } from '../invoice-reminders.mjs';
 import { uptimeResult } from '../uptime.mjs';
 import { DynamoDBClient, DescribeTableCommand } from '@aws-sdk/client-dynamodb';
 import {
@@ -257,6 +258,19 @@ export class DynamoStore {
           ? { Put: { TableName: this.table, Item: { ...Key, ...record } } }
           : { Delete: { TableName: this.table, Key } },
       );
+    if (record.module === 'invoices') {
+      const Key = { pk: 'INVOICE_REMINDERS', sk: record.user_id + '#' + record.id };
+      result.push(
+        reminderCandidate(record)
+          ? {
+              Put: {
+                TableName: this.table,
+                Item: { ...Key, user_id: record.user_id, id: record.id },
+              },
+            }
+          : { Delete: { TableName: this.table, Key } },
+      );
+    }
     return result;
   }
   async createRecord(userId, module, record, key, hash) {
@@ -388,6 +402,32 @@ export class DynamoStore {
         if (!uptime || !collision(error) || attempt === 4) throw error;
       }
     }
+  }
+  async invoiceReminders() {
+    return (await this.query('INVOICE_REMINDERS', '')).map(omitKeys);
+  }
+  async claimInvoiceReminder(userId, key, now) {
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: { pk: workspace(userId), sk: 'REMINDER#' + key, claimed: now, status: 'claimed' },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (collision(error)) return false;
+      throw error;
+    }
+  }
+  async finishInvoiceReminder(userId, key, status) {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { pk: workspace(userId), sk: 'REMINDER#' + key, status },
+      }),
+    );
   }
   async monitors() {
     return (await this.query('MONITORS', '', { limit: 50 })).map(omitKeys);
