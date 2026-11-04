@@ -37,6 +37,7 @@ export type Check = {
     incident?: { id: string; opened: string; closed?: string };
     certificateExpires?: string | null;
     registrationExpires?: string | null;
+    registrationSource?: 'manual' | 'rdap' | 'unknown';
     diff?: { before: string; after: string };
     links?: { url: string; status?: number; error?: string; sources?: string[] }[];
   };

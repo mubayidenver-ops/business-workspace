@@ -21,6 +21,9 @@ import { Welcome } from './Welcome';
 import { BusinessInsights } from './BusinessInsights';
 import { PasswordModal } from './PasswordModal';
 import { BillingPanel } from './BillingPanel';
+import { TeamPanel } from './TeamPanel';
+import { BookingSeries } from './BookingSeries';
+import { DraftPanel, aiModules } from './DraftPanel';
 import { CommandPalette } from './CommandPalette';
 import { downloadAppointment } from './calendar';
 import './styles.css';
@@ -79,7 +82,14 @@ const groupIcons: Record<string, string> = {
   Commerce: 'ShoppingBag',
 };
 const getTool = (id: string) => tools.find((t) => t.id === id)!;
-type State = { user: User; records: Item[]; checks: Check[]; storage?: string };
+type State = {
+  features?: { ai: boolean };
+  workspace: { id: string; name: string; role: 'owner' | 'viewer' | 'editor' };
+  user: User;
+  records: Item[];
+  checks: Check[];
+  storage?: string;
+};
 function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
   const [mode] = useState(
       new URLSearchParams(location.search).get('auth') === 'login' ? 'login' : 'register',
@@ -261,6 +271,11 @@ function App() {
       null,
     ),
     [print, setPrint] = useState<Item[] | null>(null);
+  const [renewing, setRenewing] = useState<Item | null>(null);
+  const [renewDate, setRenewDate] = useState(today);
+  const [renewBusy, setRenewBusy] = useState(false);
+  const [renewError, setRenewError] = useState('');
+  const [draftRecord, setDraftRecord] = useState<Item | null>(null);
   const [quoteHistory, setQuoteHistory] = useState<{ current: Item; previous: Item[] } | null>(
     null,
   );
@@ -291,7 +306,13 @@ function App() {
     return () => window.removeEventListener('keydown', shortcut);
   }, [!!state, editing, sharing, archive, checkResult, panel]);
   const refresh = async () => {
-    const data = await api<State>('/state');
+    const data = await api<State>('/state').catch((error) => {
+      if (error.status !== 403 || !sessionStorage.getItem('bw-workspace')) throw error;
+      sessionStorage.removeItem('bw-workspace');
+      setEditing(null);
+      setNotice('Team access changed. Showing your own workspace.');
+      return api<State>('/state');
+    });
     setState(data);
     setLoadError('');
   };
@@ -421,6 +442,7 @@ function App() {
         {params.has('auth') ? <Auth onAuth={refresh} /> : <Welcome />}
       </>
     );
+  const isOwner = state.workspace.role === 'owner';
   const active = state.records.filter((r) => !r.archived);
   const due = active.filter(
     (r) =>
@@ -482,11 +504,11 @@ function App() {
               business<span className="brand-second">workspace</span>
             </span>
           </a>
-          <button className="workspace-switch" onClick={() => setPanel('settings')}>
+          <button className="workspace-switch" onClick={() => setPanel('team')}>
             <span className="avatar">{state.user.name.slice(0, 1).toUpperCase()}</span>
             <span>
-              {state.user.name}
-              <small>Personal workspace</small>
+              {state.workspace.name}
+              <small>{isOwner ? 'My workspace' : state.workspace.role + ' access'}</small>
             </span>
             <Icons.ChevronsUpDown size={15} />
           </button>
@@ -916,6 +938,11 @@ function App() {
                     New {currentTool.unit}
                   </button>
                 </div>
+                {view === 'booking' && isOwner && (
+                  <button onClick={() => setPanel('booking-series')}>
+                    Reserve recurring slots
+                  </button>
+                )}
                 {currentTool.integration && (
                   <div className="integration-note">
                     <Icons.Info size={18} />
@@ -1059,10 +1086,10 @@ function App() {
                                 <td className="muted small">{date(r.updated)}</td>
                                 <td>
                                   <div className="row-actions">
-                                    {canShare(r.module) &&
+                                    {isOwner &&
+                                      canShare(r.module) &&
                                       !r.archived &&
-                                      (r.module !== 'booking' ||
-                                        (r.status === 'Active' && r.data.offerSlot)) && (
+                                      (r.module !== 'booking' || r.status === 'Active') && (
                                         <button
                                           className="icon-button"
                                           aria-label={'Share ' + r.title}
@@ -1122,7 +1149,33 @@ function App() {
                                         Transcript
                                       </button>
                                     )}
-                                    {r.module === 'proposals' && !r.archived && (
+                                    {isOwner &&
+                                      ['equipment', 'licences'].includes(r.module) &&
+                                      Number(r.data.repeatDays) > 0 &&
+                                      !r.archived &&
+                                      r.status !== 'Cancelled' && (
+                                        <button
+                                          onClick={() => {
+                                            setRenewing(r);
+                                            setRenewDate(today());
+                                            setRenewError('');
+                                          }}
+                                        >
+                                          Record completion
+                                        </button>
+                                      )}
+                                    {state.features?.ai &&
+                                      aiModules.includes(r.module) &&
+                                      !r.archived && (
+                                        <button
+                                          className="icon-button"
+                                          aria-label={'Draft with AI for ' + r.title}
+                                          onClick={() => setDraftRecord(r)}
+                                        >
+                                          <Icons.Sparkles size={16} />
+                                        </button>
+                                      )}
+                                    {isOwner && r.module === 'proposals' && !r.archived && (
                                       <button
                                         disabled={!!converting}
                                         onClick={async () => {
@@ -1151,13 +1204,14 @@ function App() {
                                     >
                                       <Icons.Pencil size={16} />
                                     </button>
-                                    {['uptime', 'links', 'changes', 'expiry'].includes(view) &&
+                                    {isOwner &&
+                                      ['uptime', 'links', 'changes', 'expiry'].includes(view) &&
                                       !r.archived && (
                                         <button disabled={!!run} onClick={() => void runCheck(r)}>
                                           {run === r.id ? 'Checking…' : 'Check now'}
                                         </button>
                                       )}
-                                    {view === 'feedback' && (
+                                    {isOwner && view === 'feedback' && (
                                       <button
                                         onClick={async () => {
                                           try {
@@ -1174,6 +1228,7 @@ function App() {
                                     )}
                                     <button
                                       className="icon-button"
+                                      disabled={!isOwner}
                                       aria-label={(r.archived ? 'Restore ' : 'Archive ') + r.title}
                                       onClick={() => {
                                         setArchive(r);
@@ -1303,6 +1358,7 @@ function App() {
         <RecordEditor
           tool={editing.tool}
           item={editing.item}
+          readOnly={state.workspace.role === 'viewer'}
           template={editing.template}
           onClose={() => setEditing(null)}
           onSave={saved}
@@ -1403,6 +1459,16 @@ function App() {
       {panel === 'commands' && (
         <CommandPalette tools={tools} open={navigate} close={() => setPanel('')} />
       )}
+      {panel === 'booking-series' && isOwner && (
+        <BookingSeries close={() => setPanel('')} saved={saved} />
+      )}
+      {panel === 'team' && (
+        <TeamPanel
+          workspaceId={state.workspace.id}
+          accountId={state.user.id}
+          onClose={() => setPanel('settings')}
+        />
+      )}
       {panel === 'settings' && (
         <Modal title="Workspace settings" onClose={() => setPanel('')}>
           <div className="modal-body">
@@ -1416,7 +1482,9 @@ function App() {
             <dl className="settings-list">
               <div>
                 <dt>Workspace access</dt>
-                <dd>Private · one account</dd>
+                <dd>
+                  {state.workspace.name} · {state.workspace.role}
+                </dd>
               </div>
               <div>
                 <dt>Storage</dt>
@@ -1425,9 +1493,13 @@ function App() {
               <div>
                 <dt>Billing</dt>
                 <dd>
-                  <button className="link-button" onClick={() => setPanel('billing')}>
-                    View plan & billing
-                  </button>
+                  {isOwner ? (
+                    <button className="link-button" onClick={() => setPanel('billing')}>
+                      View plan & billing
+                    </button>
+                  ) : (
+                    'Managed by the owner'
+                  )}
                 </dd>
               </div>
               <div>
@@ -1444,6 +1516,9 @@ function App() {
               check history.
             </p>
             <div className="actions">
+              <button onClick={() => setPanel('team')}>
+                <Icons.Users size={16} /> Teams and workspaces
+              </button>
               <button onClick={() => setPanel('password')}>
                 <Icons.LockKeyhole size={16} />
                 Change password
@@ -1464,6 +1539,7 @@ function App() {
                 onClick={async () => {
                   try {
                     await api('/logout', 'POST', {});
+                    sessionStorage.removeItem('bw-workspace');
                     setPanel('');
                     setState(null);
                   } catch (e) {
@@ -1561,7 +1637,8 @@ function App() {
             )}
             {checkResult.value.registrationExpires !== undefined && (
               <p>
-                Domain renewal (entered manually):{' '}
+                Domain registration (
+                {checkResult.value.registrationSource === 'rdap' ? 'registry' : 'manual date'}):{' '}
                 {checkResult.value.registrationExpires
                   ? date(checkResult.value.registrationExpires)
                   : 'Unknown'}
@@ -1606,6 +1683,59 @@ function App() {
         />
       )}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
+      {renewing && (
+        <Modal
+          title="Record completion"
+          onClose={() => {
+            if (!renewBusy) setRenewing(null);
+          }}
+        >
+          <form
+            className="modal-body"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setRenewBusy(true);
+              setRenewError('');
+              try {
+                await api('/records/' + renewing.id + '/renew', 'POST', {
+                  version: renewing.version,
+                  date: renewDate,
+                });
+                await saved();
+                setRenewing(null);
+              } catch (error) {
+                setRenewError((error as Error).message);
+              } finally {
+                setRenewBusy(false);
+              }
+            }}
+          >
+            <p>
+              {renewing.title}. The next due date is {String(renewing.data.repeatDays)} days after
+              this completion date.
+            </p>
+            <label>
+              Completion date
+              <input
+                type="date"
+                required
+                max={today()}
+                value={renewDate}
+                onChange={(event) => setRenewDate(event.target.value)}
+              />
+            </label>
+            {renewError && (
+              <p role="alert" className="error">
+                {renewError}
+              </p>
+            )}
+            <button className="primary" disabled={renewBusy}>
+              Save completion
+            </button>
+          </form>
+        </Modal>
+      )}
+      {draftRecord && <DraftPanel record={draftRecord} close={() => setDraftRecord(null)} />}
       {quoteHistory && (
         <Modal title="Quote revisions" onClose={() => setQuoteHistory(null)}>
           <div className="modal-body">
@@ -1636,13 +1766,13 @@ function App() {
             <button onClick={() => setPrint(null)}>Close print preview</button>
             <button onClick={() => window.print()}>Print / save PDF</button>
           </div>
-          <h1>{state.user.name}</h1>
+          <h1>{state.workspace.name}</h1>
           {print.map((r) =>
             ['proposals', 'invoices'].includes(r.module) ? (
               <DocumentView
                 key={r.id}
                 title={r.title}
-                brand={state.user.name}
+                brand={state.workspace.name}
                 data={r.data}
                 module={r.module}
               />

@@ -1,5 +1,28 @@
 import { randomUUID } from 'node:crypto';
 export const storageError = (status, message) => Object.assign(new Error(message), { status });
+export function sharedSlotRecord(records, share, version, slotId) {
+  if (!slotId) {
+    if (share.recordVersion !== version)
+      throw storageError(409, 'This document changed. Request a new link.');
+    return share.record_id;
+  }
+  const anchor = records.find((record) => record.id === share.record_id);
+  const slot = records.find((record) => record.id === slotId);
+  if (
+    !anchor ||
+    anchor.archived ||
+    anchor.status !== 'Active' ||
+    !slot ||
+    slot.archived ||
+    slot.module !== 'booking' ||
+    slot.version !== version ||
+    slot.status !== 'Active' ||
+    !share.bookingSlots?.some((entry) => entry.id === slotId && entry.version === version) ||
+    !(Date.parse(JSON.parse(slot.data).start) > Date.now())
+  )
+    throw storageError(409, 'This appointment is no longer available.');
+  return slotId;
+}
 export function assertBooking(records, candidate) {
   if (
     candidate.module !== 'booking' ||

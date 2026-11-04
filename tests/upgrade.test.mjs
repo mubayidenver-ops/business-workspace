@@ -151,3 +151,74 @@ test('invoice reminders require opt-in, skip paid or paused invoices, and claim 
   assert.equal(messages[0].body, messages[1].body);
   assert.match(JSON.parse(messages[0].body).text, /80\.00/);
 });
+
+test('AI drafts use only approved notes from the selected revision', async () => {
+  const { draftRecord } = await import('../server/ai-drafts.mjs');
+  const record = {
+    module: 'meetings',
+    title: 'Private title',
+    version: 3,
+    data: JSON.stringify({
+      notes: 'Agree the launch date.',
+      email: 'private@example.com',
+      attachment: 'secret',
+    }),
+  };
+  const config = { key: 'fake-key', model: 'configured-model' };
+  let calls = 0;
+  const send = async (url, request) => {
+    calls++;
+    assert.equal(url, 'https://api.openai.com/v1/responses');
+    const input = JSON.parse(request.body);
+    assert.equal(input.input, 'Agree the launch date.');
+    assert.equal(input.store, false);
+    assert.equal(input.model, 'configured-model');
+    assert.ok(!request.body.includes('private@example.com'));
+    return Response.json({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'Confirm the date.' }] }],
+    });
+  };
+  await assert.rejects(
+    draftRecord(record, { confirmed: true, version: 2 }, config, send),
+    /current record/,
+  );
+  await assert.rejects(
+    draftRecord(record, { confirmed: true, version: 3 }, null, send),
+    /unavailable/,
+  );
+  const result = await draftRecord(record, { confirmed: true, version: 3 }, config, send);
+  assert.equal(calls, 1);
+  assert.deepEqual(result, {
+    draft: 'Confirm the date.',
+    source: { title: 'Private title', version: 3 },
+  });
+});
+
+test('RDAP uses the trusted bootstrap and returns only a matching domain expiry', async () => {
+  const { registrationExpiry, registrationDomain } = await import('../server/rdap.mjs');
+  assert.equal(registrationDomain('https://example.com'), '');
+  assert.equal(registrationDomain('example.com/path'), '');
+  const calls = [];
+  const fetchPage = async (url) => {
+    calls.push(url);
+    return {
+      status: 200,
+      body: JSON.stringify(
+        url.includes('iana.org')
+          ? { services: [[['com'], ['https://registry.example/rdap/']]] }
+          : {
+              objectClassName: 'domain',
+              ldhName: 'example.com',
+              events: [{ eventAction: 'expiration', eventDate: '2030-02-01T00:00:00Z' }],
+            },
+      ),
+    };
+  };
+  assert.equal(await registrationExpiry('EXAMPLE.COM.', fetchPage), '2030-02-01T00:00:00.000Z');
+  assert.equal(await registrationExpiry('other.com', fetchPage), null);
+  assert.deepEqual(calls, [
+    'https://data.iana.org/rdap/dns.json',
+    'https://registry.example/rdap/domain/example.com',
+    'https://registry.example/rdap/domain/other.com',
+  ]);
+});

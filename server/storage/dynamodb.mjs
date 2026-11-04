@@ -10,7 +10,14 @@ import {
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
-import { makeRecord, changeRecord, replayRequest, isMonitor, storageError } from './rules.mjs';
+import {
+  makeRecord,
+  changeRecord,
+  replayRequest,
+  isMonitor,
+  storageError,
+  sharedSlotRecord,
+} from './rules.mjs';
 
 const workspace = (userId) => `WORKSPACE#${userId}`;
 const omitKeys = (item) => {
@@ -101,6 +108,70 @@ export class DynamoStore {
       cursor = response.LastEvaluatedKey;
     } while (cursor && result.length < limit);
     return result;
+  }
+  async membership(ownerId, memberId) {
+    return omitKeys(await this.get(workspace(ownerId), 'MEMBER#' + memberId));
+  }
+  async memberships(id, byOwner) {
+    return (await this.query(workspace(id), byOwner ? 'MEMBER#' : 'JOINED#')).map(omitKeys);
+  }
+  async teamAudit(ownerId) {
+    return (
+      await this.query(workspace(ownerId), 'TEAM_AUDIT#', { limit: 20, descending: true })
+    ).map(omitKeys);
+  }
+  teamAuditWrite(ownerId, memberId, action) {
+    const created = new Date().toISOString();
+    return {
+      Put: {
+        TableName: this.table,
+        Item: {
+          pk: workspace(ownerId),
+          sk: 'TEAM_AUDIT#' + created + '#' + randomUUID(),
+          created,
+          memberId,
+          action,
+        },
+      },
+    };
+  }
+  async setMembership(entry) {
+    return this.mutate(entry.ownerId, () => ({
+      items: [
+        {
+          Put: {
+            TableName: this.table,
+            Item: { ...entry, pk: workspace(entry.ownerId), sk: 'MEMBER#' + entry.memberId },
+          },
+        },
+        {
+          Put: {
+            TableName: this.table,
+            Item: { ...entry, pk: workspace(entry.memberId), sk: 'JOINED#' + entry.ownerId },
+          },
+        },
+        this.teamAuditWrite(entry.ownerId, entry.memberId, entry.role),
+      ],
+    }));
+  }
+  async removeMembership(ownerId, memberId) {
+    return this.mutate(ownerId, () => ({
+      items: [
+        {
+          Delete: {
+            TableName: this.table,
+            Key: { pk: workspace(ownerId), sk: 'MEMBER#' + memberId },
+          },
+        },
+        {
+          Delete: {
+            TableName: this.table,
+            Key: { pk: workspace(memberId), sk: 'JOINED#' + ownerId },
+          },
+        },
+        this.teamAuditWrite(ownerId, memberId, 'revoked'),
+      ],
+    }));
   }
   async userByEmail(email) {
     return omitKeys(await this.get(`ACCOUNT#${email}`, 'PROFILE'));
@@ -273,8 +344,10 @@ export class DynamoStore {
     }
     return result;
   }
-  async createRecord(userId, module, record, key, hash) {
+  async createRecord(userId, module, record, key, hash, editorId) {
     return this.mutate(userId, async (snapshot) => {
+      if (editorId && (await this.membership(userId, editorId))?.role !== 'editor')
+        throw storageError(403, 'Editor access is no longer available.');
       const previous = key ? await this.get(workspace(userId), `REQUEST#${key}`) : null;
       const replay = previous
         ? replayRequest(
@@ -297,13 +370,38 @@ export class DynamoStore {
       return { items, increment: 1, result: { record: r, replayed: false } };
     });
   }
+  async createBookingSeries(userId, inputs, key, hash) {
+    return this.mutate(userId, async ({ records }) => {
+      const request = await this.get(workspace(userId), 'REQUEST#' + key);
+      if (replayRequest(request, hash, records)) return { result: undefined };
+      const items = [];
+      const existing = [...records];
+      let first;
+      for (const input of inputs) {
+        const record = makeRecord(userId, 'booking', input, existing);
+        existing.push(record);
+        first ||= record;
+        items.push(...this.recordWrites(record));
+      }
+      items.push({
+        Put: {
+          TableName: this.table,
+          Item: { pk: workspace(userId), sk: 'REQUEST#' + key, hash, record_id: first.id },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      });
+      return { items, increment: inputs.length };
+    });
+  }
   async quoteRevisions(userId, id) {
     return (
       await this.query(workspace(userId), `QUOTE#${id}#`, { limit: 20, descending: true })
     ).map(omitKeys);
   }
-  async updateRecord(userId, id, version, patch) {
-    return this.mutate(userId, ({ records }) => {
+  async updateRecord(userId, id, version, patch, editorId) {
+    return this.mutate(userId, async ({ records }) => {
+      if (editorId && (await this.membership(userId, editorId))?.role !== 'editor')
+        throw storageError(403, 'Editor access is no longer available.');
       const record = changeRecord(records, id, version, patch);
       const items = this.recordWrites(record);
       if (record.module === 'proposals')
@@ -489,15 +587,19 @@ export class DynamoStore {
       };
     });
   }
-  async respondToShare(hash, version, patch) {
+  async respondToShare(hash, version, patch, slotId) {
     const initial = await this.getShare(hash);
     if (!initial) throw storageError(410, 'This link is no longer available.');
     return this.mutate(initial.user_id, async ({ records }) => {
       const share = await this.getShare(hash);
       if (!share) throw storageError(410, 'This link is no longer available.');
-      if (share.recordVersion !== version)
-        throw storageError(409, 'This document changed. Request a new link.');
-      const record = changeRecord(records, share.record_id, version, patch);
+      const record = changeRecord(
+        records,
+        sharedSlotRecord(records, share, version, slotId),
+        version,
+        patch,
+      );
+      if (slotId) return { items: this.recordWrites(record), result: record };
       return {
         items: [
           ...this.recordWrites(record),

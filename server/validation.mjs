@@ -1,3 +1,4 @@
+import { registrationDomain } from './rdap.mjs';
 import { validateAttachment } from './attachments.mjs';
 import { byId, statuses } from '../shared/tools.mjs';
 import { calculateDocument } from '../shared/pricing.mjs';
@@ -80,6 +81,27 @@ export function validateRecord(module, input) {
       throw new Error('Choose a valid date and time.');
     data[field.key] = value;
   }
+  if (data.registrationDomain) {
+    data.registrationDomain = registrationDomain(data.registrationDomain);
+    if (!data.registrationDomain) throw new Error('Enter a registered domain such as example.com.');
+  }
+  if (
+    data.repeatDays &&
+    (!/^\d+$/.test(data.repeatDays) ||
+      Number(data.repeatDays) < 1 ||
+      Number(data.repeatDays) > 3660)
+  )
+    throw new Error('Choose a repeat interval from 1 to 3660 days.');
+  if (data.reminderDays && (!/^\d+$/.test(data.reminderDays) || Number(data.reminderDays) > 90))
+    throw new Error('Choose a reminder lead time from 0 to 90 days.');
+  if (module === 'changes' && Boolean(data.regionStart) !== Boolean(data.regionEnd))
+    throw new Error('Enter both region markers or leave both blank.');
+  if (
+    module === 'onboarding' &&
+    (data.intakeChecklist.length > 1200 ||
+      data.intakeChecklist.split('\n').filter((line) => line.trim()).length > 8)
+  )
+    throw new Error('Use up to eight intake questions and 1,200 characters.');
   if (
     module === 'uptime' &&
     data.intervalMinutes &&

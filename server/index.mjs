@@ -7,6 +7,8 @@ import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
 import { safeFetch } from './network.mjs';
 import { checkInterval } from './uptime.mjs';
+import { registrationExpiry } from './rdap.mjs';
+import { aiConfig, draftRecord } from './ai-drafts.mjs';
 import { reminderConfig, sendInvoiceReminders } from './invoice-reminders.mjs';
 import { crawlLinks, comparePage } from './website-checks.mjs';
 import {
@@ -73,8 +75,10 @@ async function check(record) {
   if (checking.has(record.id)) throw fail(409, 'A check is already running.');
   checking.add(record.id);
   let result;
+  const d = JSON.parse(record.data);
+  const domainExpiry =
+    record.module === 'expiry' && !d.due ? registrationExpiry(d.registrationDomain) : null;
   try {
-    const d = JSON.parse(record.data);
     const page = await safeFetch(
       d.url,
       0,
@@ -92,13 +96,18 @@ async function check(record) {
     }
     if (record.module === 'expiry') {
       result.certificateExpires = page.certificate;
-      result.registrationExpires = d.due || null;
     }
     if (record.module === 'links') result.links = await crawlLinks(page);
   } catch (e) {
     result = { ok: false, error: e.message };
   }
   try {
+    if (record.module === 'expiry') {
+      const registration = d.due || (await domainExpiry);
+      result.registrationExpires = registration;
+      result.registrationSource = d.due ? 'manual' : registration ? 'rdap' : 'unknown';
+      result.certificateExpires ??= null;
+    }
     return await store.saveCheck(record, result);
   } finally {
     checking.delete(record.id);
@@ -240,6 +249,64 @@ const server = createServer(async (req, res) => {
       if (!share)
         throw fail(410, 'This link has expired, was revoked, or has already received a response.');
       const record = await store.getRecord(share.user_id, share.record_id);
+      if (share.bookingSlots?.length && record && !record.archived && record.status === 'Active') {
+        if (req.method === 'GET') {
+          const records = await Promise.all(
+            share.bookingSlots.map((slot) => store.getRecord(share.user_id, slot.id)),
+          );
+          const slots = records
+            .flatMap((slot, index) => {
+              if (!slot || slot.archived || slot.version !== share.bookingSlots[index].version)
+                return [];
+              try {
+                assertBookable(slot);
+              } catch {
+                return [];
+              }
+              const { start, end } = JSON.parse(slot.data);
+              return [{ id: slot.id, version: slot.version, start, end }];
+            })
+            .sort((a, b) => a.start.localeCompare(b.start));
+          json(res, 200, {
+            module: 'booking',
+            brand: share.brand,
+            title: 'Choose an appointment',
+            expires: share.expires,
+            version: share.recordVersion,
+            data: {},
+            slots,
+          });
+          return;
+        }
+        if (req.method === 'POST') {
+          const input = await body(req);
+          const selected = share.bookingSlots.find(
+            (slot) => slot.id === input.slotId && slot.version === input.version,
+          );
+          if (!selected) throw fail(409, 'Choose an available appointment.');
+          const slot = await store.getRecord(share.user_id, selected.id);
+          if (!slot || slot.archived || slot.version !== selected.version)
+            throw fail(409, 'This appointment is no longer available.');
+          const response = clientResponse(slot, input);
+          const data = {
+            ...JSON.parse(slot.data),
+            client: response.name,
+            offerSlot: false,
+            clientResponse: JSON.stringify(response),
+          };
+          await store.respondToShare(
+            hash,
+            slot.version,
+            { data: JSON.stringify(data), status: 'Active' },
+            selected.id,
+          );
+          json(res, 200, { received: true, action: 'book' });
+          return;
+        }
+        throw fail(405, 'This action is not available.');
+      }
+      if (share.bookingSlots?.length)
+        throw fail(410, 'This appointment link is no longer available.');
       if (!record || record.archived || record.version !== share.recordVersion)
         throw fail(410, 'The owner updated this document. Ask for a new link.');
       if (record.module === 'booking') assertBookable(record);
@@ -291,8 +358,9 @@ const server = createServer(async (req, res) => {
       }
       throw fail(405, 'This action is not available.');
     }
-    const user = await userFor(req);
-    if (!user) throw fail(401, 'Sign in to open your workspace.');
+    const actor = await userFor(req);
+    if (!actor) throw fail(401, 'Sign in to open your workspace.');
+    let user = actor;
     if (url.pathname === '/api/password' && req.method === 'POST') {
       rate('password:' + user.id, 10);
       const b = await body(req);
@@ -328,10 +396,76 @@ const server = createServer(async (req, res) => {
       );
       return;
     }
+    if (url.pathname === '/api/team') {
+      if (req.method === 'GET') {
+        const [members, joined, audit] = await Promise.all([
+          store.memberships(actor.id, true),
+          store.memberships(actor.id, false),
+          store.teamAudit(actor.id),
+        ]);
+        json(res, 200, { members, joined, audit });
+        return;
+      }
+      if (req.method === 'POST') {
+        rate('team:' + actor.id, 30);
+        const input = await body(req);
+        if (!['viewer', 'editor'].includes(input.role) || input.confirmed !== true)
+          throw fail(400, 'Choose a role and confirm workspace access.');
+        const email = String(input.email || '')
+          .trim()
+          .toLowerCase();
+        if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+          throw fail(400, 'Enter the account’s email address.');
+        const target = await store.userByEmail(email);
+        if (!target || target.id === actor.id || input.memberId !== target.id)
+          throw fail(400, 'The email and account ID must match another existing account.');
+        await store.setMembership({
+          ownerId: actor.id,
+          ownerName: actor.name,
+          memberId: target.id,
+          memberEmail: target.email,
+          memberName: target.name,
+          role: input.role,
+        });
+        json(res, 200, { saved: true });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        rate('team:' + actor.id, 30);
+        const { memberId } = await body(req);
+        if (typeof memberId !== 'string' || !/^[a-f0-9-]{36}$/i.test(memberId))
+          throw fail(400, 'Choose a member.');
+        await store.removeMembership(actor.id, memberId);
+        json(res, 200, { removed: true });
+        return;
+      }
+      throw fail(405, 'This team action is not available.');
+    }
+    const selected = req.headers['x-workspace'];
+    let role = 'owner';
+    if (selected && selected !== actor.id) {
+      if (typeof selected !== 'string' || !/^[a-f0-9-]{36}$/i.test(selected))
+        throw fail(403, 'This workspace is not available.');
+      const membership = await store.membership(selected, actor.id);
+      if (!membership || !['viewer', 'editor'].includes(membership.role))
+        throw fail(403, 'This workspace is not available.');
+      role = membership.role;
+      const read =
+        req.method === 'GET' &&
+        (url.pathname === '/api/state' || /^\/api\/records\/[\w-]+\/revisions$/.test(url.pathname));
+      const edit =
+        role === 'editor' &&
+        ((req.method === 'POST' && url.pathname === '/api/records') ||
+          (req.method === 'PATCH' && /^\/api\/records\/[\w-]+$/.test(url.pathname)));
+      if (!read && !edit) throw fail(403, 'Only the workspace owner can perform this action.');
+      user = { id: selected, name: membership.ownerName };
+    }
     if (url.pathname === '/api/state' && req.method === 'GET') {
       const state = await store.state(user.id);
       json(res, 200, {
-        user,
+        user: actor,
+        workspace: { id: user.id, name: user.name, role },
+        features: { ai: role === 'owner' && Boolean(aiConfig(actor.id)) },
         records: state.records.map(toRecord),
         checks: state.checks,
         storage:
@@ -368,8 +502,51 @@ const server = createServer(async (req, res) => {
       }
       return;
     }
+    if (url.pathname === '/api/booking-series' && req.method === 'POST') {
+      rate('booking-series:' + actor.id, 10);
+      const input = await body(req);
+      if (
+        !Array.isArray(input.slots) ||
+        input.slots.length < 2 ||
+        input.slots.length > 13 ||
+        typeof input.requestKey !== 'string' ||
+        !/^[a-f0-9-]{36}$/i.test(input.requestKey)
+      )
+        throw fail(400, 'Choose 2 to 13 slots.');
+      let records;
+      try {
+        records = input.slots.map((slot) => {
+          const record = validateRecord('booking', {
+            title: input.title,
+            status: 'Active',
+            data: {
+              client: 'Available slot',
+              offerSlot: true,
+              start: slot.start,
+              end: slot.end,
+              bufferMinutes: input.bufferMinutes,
+            },
+          });
+          if (Date.parse(record.data.start) <= Date.now())
+            throw new Error('All slots must start in the future.');
+          return record;
+        });
+      } catch (error) {
+        throw fail(400, error.message);
+      }
+      await store.createBookingSeries(
+        user.id,
+        records,
+        input.requestKey,
+        sessionHash(JSON.stringify({ kind: 'booking-series', records })),
+      );
+      json(res, 201, { count: records.length });
+      return;
+    }
     if (url.pathname === '/api/records' && req.method === 'POST') {
       const b = await body(req);
+      if (role !== 'owner' && b.module === 'invoices' && b.data?.emailReminder)
+        throw fail(403, 'Only the workspace owner can schedule invoice emails.');
       let record;
       try {
         record = validateRecord(b.module, b);
@@ -383,15 +560,64 @@ const server = createServer(async (req, res) => {
       const requestHash = createHash('sha256')
         .update(JSON.stringify({ module: b.module, ...record }))
         .digest('hex');
-      const saved = await store.createRecord(user.id, b.module, record, requestKey, requestHash);
+      const saved = await store.createRecord(
+        user.id,
+        b.module,
+        record,
+        requestKey,
+        requestHash,
+        role === 'editor' ? actor.id : undefined,
+      );
       json(res, saved.replayed ? 200 : 201, toRecord(saved.record));
       return;
     }
-    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions))?$/.exec(
-      url.pathname,
-    );
+    const match =
+      /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions|draft|renew))?$/.exec(
+        url.pathname,
+      );
     if (match) {
       const r = await own(user, match[1]);
+      if (match[2] === 'renew' && req.method === 'POST') {
+        if (!['equipment', 'licences'].includes(r.module) || r.archived || r.status === 'Cancelled')
+          throw fail(400, 'This record cannot be renewed.');
+        const input = await body(req);
+        const data = JSON.parse(r.data);
+        const days = Number(data.repeatDays);
+        const completed =
+          typeof input.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.date)
+            ? Date.parse(input.date + 'T00:00:00Z')
+            : NaN;
+        if (
+          !Number.isFinite(completed) ||
+          new Date(completed).toISOString().slice(0, 10) !== input.date ||
+          completed > Date.now() + 86400000 ||
+          completed < Date.now() - 365 * 86400000 ||
+          !Number.isInteger(days) ||
+          days < 1 ||
+          days > 3660
+        )
+          throw fail(400, 'Choose a valid completion date and configure the repeat interval.');
+        if (data.lastCompleted && data.lastCompleted >= input.date)
+          throw fail(409, 'Choose a date after the last recorded completion.');
+        data.lastCompleted = input.date;
+        data.due = new Date(completed + days * 86400000).toISOString().slice(0, 10);
+        json(
+          res,
+          200,
+          toRecord(
+            await store.updateRecord(user.id, r.id, input.version, {
+              data: JSON.stringify(data),
+              status: 'Active',
+            }),
+          ),
+        );
+        return;
+      }
+      if (match[2] === 'draft' && req.method === 'POST') {
+        rate('draft:' + actor.id, 5);
+        json(res, 200, await draftRecord(r, await body(req), aiConfig(actor.id)));
+        return;
+      }
       if (match[2] === 'revisions' && req.method === 'GET') {
         if (r.module !== 'proposals') throw fail(404, 'Quote history is unavailable.');
         json(res, 200, (await store.quoteRevisions(user.id, r.id)).map(toRecord));
@@ -404,7 +630,8 @@ const server = createServer(async (req, res) => {
             active:
               !!share &&
               share.expires > Date.now() &&
-              share.recordVersion === r.version &&
+              (share.recordVersion === r.version ||
+                (share.bookingSlots?.length && r.status === 'Active')) &&
               !r.archived,
             expires: share?.expires,
           });
@@ -419,9 +646,10 @@ const server = createServer(async (req, res) => {
           if (b.version !== r.version)
             throw fail(409, 'This record changed. Refresh before sharing.');
           let collection;
+          let bookingSlots;
           if (b.collection !== undefined) {
             if (
-              !collectionModules.includes(r.module) ||
+              (!collectionModules.includes(r.module) && r.module !== 'booking') ||
               !Array.isArray(b.collection) ||
               b.collection.length > 12 ||
               b.collection.some(
@@ -443,14 +671,22 @@ const server = createServer(async (req, res) => {
               )
             )
               throw fail(400, 'One or more records cannot be included.');
-            collection = entries.map((entry) => ({ id: entry.id, version: entry.version }));
+            if (r.module === 'booking' && entries.length) {
+              entries.forEach(assertBookable);
+              bookingSlots = [r, ...entries].map((entry) => ({
+                id: entry.id,
+                version: entry.version,
+              }));
+            } else collection = entries.map((entry) => ({ id: entry.id, version: entry.version }));
           }
           const days = Number(b.days ?? 7);
           if (![1, 7, 30].includes(days)) throw fail(400, 'Choose a supported link expiry.');
           const token = randomBytes(32).toString('hex');
           const quoteExpiry = r.module === 'proposals' && JSON.parse(r.data).due;
           const expires = Math.min(
-            r.module === 'booking' ? Date.parse(JSON.parse(r.data).start) : Infinity,
+            r.module === 'booking' && !bookingSlots
+              ? Date.parse(JSON.parse(r.data).start)
+              : Infinity,
             Date.now() + days * 86400000,
             quoteExpiry ? Date.parse(quoteExpiry + 'T00:00:00Z') + 86400000 : Infinity,
           );
@@ -463,6 +699,7 @@ const server = createServer(async (req, res) => {
             brand: user.name,
             recordVersion: r.version,
             ...(collection?.length ? { collection } : {}),
+            ...(bookingSlots ? { bookingSlots } : {}),
             expires,
           });
           json(res, 201, { token, expires });
@@ -519,6 +756,16 @@ const server = createServer(async (req, res) => {
       }
       if (req.method === 'PATCH' && !match[2]) {
         const b = await body(req);
+        if (
+          role !== 'owner' &&
+          (typeof b.archived === 'boolean' ||
+            (r.module === 'invoices' &&
+              (JSON.parse(r.data).emailReminder || b.data?.emailReminder)))
+        )
+          throw fail(
+            403,
+            'Only the workspace owner can archive records or manage scheduled invoice emails.',
+          );
         if (b.version !== r.version)
           throw fail(
             409,
@@ -536,9 +783,16 @@ const server = createServer(async (req, res) => {
           }
           const existing = JSON.parse(r.data);
           if (existing.clientResponse) record.data.clientResponse = existing.clientResponse;
+          if (existing.lastCompleted) record.data.lastCompleted = existing.lastCompleted;
           patch = { title: record.title, status: record.status, data: JSON.stringify(record.data) };
         }
-        const updated = await store.updateRecord(user.id, r.id, b.version, patch);
+        const updated = await store.updateRecord(
+          user.id,
+          r.id,
+          b.version,
+          patch,
+          role === 'editor' ? actor.id : undefined,
+        );
         json(res, 200, toRecord(updated));
         return;
       }

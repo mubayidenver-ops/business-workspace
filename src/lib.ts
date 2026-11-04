@@ -1,7 +1,11 @@
 export async function api<T = unknown>(path: string, method = 'GET', value?: unknown): Promise<T> {
+  const workspace = sessionStorage.getItem('bw-workspace');
   const response = await fetch('/api' + path, {
     method,
-    headers: method === 'GET' ? {} : { 'Content-Type': 'application/json' },
+    headers: {
+      ...(method === 'GET' ? {} : { 'Content-Type': 'application/json' }),
+      ...(workspace ? { 'X-Workspace': workspace } : {}),
+    },
     body: value === undefined ? undefined : JSON.stringify(value),
     signal: AbortSignal.timeout(70000),
   });
