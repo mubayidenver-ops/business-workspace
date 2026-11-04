@@ -29,6 +29,7 @@ import { CommandPalette } from './CommandPalette';
 import { downloadAppointment } from './calendar';
 import './styles.css';
 import './pro.css';
+import './refresh.css';
 const tools = registry as Tool[];
 const icons: Record<
   string,
@@ -667,33 +668,29 @@ function App() {
               <>
                 <div className="page-heading">
                   <div>
-                    <p className="eyebrow">YOUR DAILY STARTING POINT</p>
-                    <h1>Good work starts here.</h1>
-                    <p className="muted">A little clarity for everything you’re building.</p>
+                    <p className="eyebrow">{state.workspace.name}</p>
+                    <h1>Workspace overview</h1>
+                    <p className="muted">Your latest work, deadlines and favourite tools.</p>
                   </div>
                   <button className="primary" onClick={() => navigate('tools')}>
-                    <Icons.Plus size={17} />
-                    Explore your tools
+                    <Icons.Grid2X2 size={17} />
+                    Browse tools
                   </button>
                 </div>
                 <div className="dashboard-top">
                   <section className="welcome-card">
                     <div className="welcome-content">
                       <span className="welcome-label">
-                        <span /> ONE CONNECTED WORKSPACE
+                        <span /> QUICK ACCESS
                       </span>
                       <h2>
-                        Big ambitions.
+                        Find the work
                         <br />
-                        Less juggling.
+                        you need.
                       </h2>
-                      <p>
-                        Your clients, content, and everyday tasks.
-                        <br />
-                        Finally pulling in the same direction.
-                      </p>
-                      <button onClick={() => navigate('tools')}>
-                        Find your next tool <Icons.ArrowRight size={17} />
+                      <p>Search clients, projects, invoices and tools from one place.</p>
+                      <button onClick={() => setPanel('commands')}>
+                        Search workspace <Icons.Search size={17} />
                       </button>
                     </div>
                     <div className="tool-art" aria-hidden="true">
@@ -713,74 +710,86 @@ function App() {
                       <div className="art-spark">✳</div>
                     </div>
                   </section>
-                  <section className="momentum-card">
-                    <span className="eyebrow">YOUR WORKSPACE AT A GLANCE</span>
-                    <div className="momentum-row">
-                      <span className="metric-icon">
-                        <Icons.Layers3 size={19} />
-                      </span>
+                  <section className="records-panel attention-panel">
+                    <div className="section-heading">
                       <div>
-                        <strong>{active.length}</strong>
-                        <span>Saved records</span>
+                        <p className="eyebrow">FOLLOW UP</p>
+                        <h2>Needs attention</h2>
                       </div>
-                      <Icons.ArrowUpRight size={17} />
+                      <span className="attention-icon">
+                        <Icons.Bell size={18} />
+                      </span>
                     </div>
-                    <div className="momentum-row">
-                      <span className="metric-icon peach">
-                        <Icons.CircleDashed size={19} />
-                      </span>
-                      <div>
-                        <strong>{open.length}</strong>
-                        <span>Open items</span>
+                    {due.slice(0, 4).map((record) => (
+                      <button
+                        className="recent-item"
+                        key={record.id}
+                        onClick={() => setEditing({ tool: getTool(record.module), item: record })}
+                      >
+                        <Icon name={getTool(record.module).icon} />
+                        <span>
+                          <strong>{record.title}</strong>
+                          <small>Due {date(String(record.data.due))}</small>
+                        </span>
+                        <Icons.ArrowRight size={16} />
+                      </button>
+                    ))}
+                    {uptimeAlerts.length > 0 && (
+                      <button className="recent-item" onClick={() => setPanel('notifications')}>
+                        <Icons.Activity size={18} />
+                        <span>
+                          <strong>Website alerts</strong>
+                          <small>{uptimeAlerts.length} recent website events</small>
+                        </span>
+                        <Icons.ArrowRight size={16} />
+                      </button>
+                    )}
+                    {!due.length && !uptimeAlerts.length && (
+                      <div className="attention-empty">
+                        <Icons.CircleCheck size={22} />
+                        <div>
+                          <strong>You’re caught up</strong>
+                          <p className="muted">No due reminders or recent website alerts.</p>
+                        </div>
                       </div>
-                      <Icons.ArrowUpRight size={17} />
-                    </div>
-                    <button
-                      className="momentum-row reminder-row"
-                      onClick={() => setPanel('notifications')}
-                    >
-                      <span className="metric-icon lilac">
-                        <Icons.CalendarClock size={19} />
-                      </span>
-                      <div>
-                        <strong>{due.length}</strong>
-                        <span>Due reminders</span>
-                      </div>
-                      <Icons.ArrowRight size={17} />
-                    </button>
+                    )}
                   </section>
                 </div>
-                <section className="records-panel section">
-                  <div className="section-heading">
-                    <h2>Needs attention</h2>
+                <section className="momentum-card">
+                  <span className="eyebrow">YOUR WORKSPACE AT A GLANCE</span>
+                  <div className="momentum-row">
+                    <span className="metric-icon">
+                      <Icons.Layers3 size={19} />
+                    </span>
+                    <div>
+                      <strong>{active.length}</strong>
+                      <span>Saved records</span>
+                    </div>
+                    <Icons.ArrowUpRight size={17} />
                   </div>
-                  {due.slice(0, 4).map((record) => (
-                    <button
-                      className="recent-item"
-                      key={record.id}
-                      onClick={() => setEditing({ tool: getTool(record.module), item: record })}
-                    >
-                      <Icon name={getTool(record.module).icon} />
-                      <span>
-                        <strong>{record.title}</strong>
-                        <small>Due {date(String(record.data.due))}</small>
-                      </span>
-                      <Icons.ArrowRight size={16} />
-                    </button>
-                  ))}
-                  {uptimeAlerts.length > 0 && (
-                    <button className="recent-item" onClick={() => setPanel('notifications')}>
-                      <Icons.Activity size={18} />
-                      <span>
-                        <strong>Website alerts</strong>
-                        <small>{uptimeAlerts.length} recent website events</small>
-                      </span>
-                      <Icons.ArrowRight size={16} />
-                    </button>
-                  )}
-                  {!due.length && !uptimeAlerts.length && (
-                    <p className="muted">No due reminders or recent website alerts.</p>
-                  )}
+                  <div className="momentum-row">
+                    <span className="metric-icon peach">
+                      <Icons.CircleDashed size={19} />
+                    </span>
+                    <div>
+                      <strong>{open.length}</strong>
+                      <span>Open items</span>
+                    </div>
+                    <Icons.ArrowUpRight size={17} />
+                  </div>
+                  <button
+                    className="momentum-row reminder-row"
+                    onClick={() => setPanel('notifications')}
+                  >
+                    <span className="metric-icon lilac">
+                      <Icons.CalendarClock size={19} />
+                    </span>
+                    <div>
+                      <strong>{due.length}</strong>
+                      <span>Due reminders</span>
+                    </div>
+                    <Icons.ArrowRight size={17} />
+                  </button>
                 </section>
                 <BusinessInsights
                   records={state.records}

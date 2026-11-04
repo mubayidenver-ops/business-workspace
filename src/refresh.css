@@ -1,0 +1,270 @@
+:root {
+  --bg: #f2f5fc;
+  --surface: #fff;
+  --ink: #17233c;
+  --muted: #53617b;
+  --line: #dce4f2;
+  --brand: #3047a4;
+  --brand-hover: #253885;
+  --accent: #bceeee;
+  --focus: #405ccd;
+  --thumb: #a7b6d3;
+  --track: #edf1fa;
+  --radius: 16px;
+}
+
+.sidebar {
+  background: #151e3a;
+  color: #f1f4ff;
+  --thumb: #68789c;
+  --track: #151e3a;
+}
+
+.sidebar .nav-item:hover,
+.sidebar .nav-item.selected {
+  background: #a7b9ff22;
+  color: #f2f5ff;
+}
+
+.sidebar .nav-label,
+.sidebar .workspace-switch small,
+.sidebar .profile small {
+  color: #b9c8e5;
+}
+
+.topbar {
+  background: #f9fbff;
+  border-bottom-color: var(--line);
+}
+
+.dashboard-top {
+  grid-template-columns: minmax(0, 1.55fr) minmax(240px, 1fr);
+  align-items: stretch;
+  gap: 20px;
+}
+
+.welcome-card {
+  container-type: inline-size;
+  background: linear-gradient(125deg, #1e2a52, #314da7);
+  border-color: #344a8d;
+  color: #fff;
+  min-height: 258px;
+  padding: 30px;
+}
+
+.welcome-content {
+  flex-shrink: 1;
+  max-width: 62%;
+}
+
+.welcome-card h2 {
+  color: #fff;
+  font-size: clamp(26px, 3.2vw, 43px);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
+}
+
+.welcome-label,
+.welcome-card p {
+  color: #d7e2ff;
+}
+
+.welcome-label > span {
+  background: #9aebea;
+}
+
+.welcome-card button {
+  background: #c8f2f0;
+  border-color: #c8f2f0;
+  color: #142740;
+  font-size: 13px;
+  min-height: 44px;
+}
+
+.welcome-card button:hover {
+  background: #eefdfd;
+}
+
+.welcome-card .tool-art {
+  right: 8px;
+  opacity: 1;
+  transform: scale(0.83);
+  transform-origin: right center;
+}
+
+@container (max-width: 425px) {
+  .welcome-card .tool-art {
+    display: none;
+  }
+
+  .welcome-content {
+    max-width: 100%;
+  }
+}
+
+.art-orbit {
+  border-color: #d6e0ff70;
+}
+
+.art-one {
+  background: #e5ecff;
+  color: #293c85;
+}
+
+.art-two {
+  background: #344eaa;
+  border-color: #aabafa;
+}
+
+.art-three {
+  background: #a6e6ed;
+  color: #173357;
+}
+
+.art-spark {
+  color: #a6e6ed;
+}
+
+.attention-panel {
+  padding: 22px;
+  min-width: 0;
+}
+
+.attention-panel .section-heading {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.attention-panel .eyebrow {
+  margin: 0 0 5px;
+}
+
+.attention-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 12px;
+  color: #344aa0;
+  background: #edf1ff;
+}
+
+.attention-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: #eef5fd;
+}
+
+.attention-empty > svg {
+  color: #3047a4;
+  flex-shrink: 0;
+}
+
+.attention-empty p {
+  margin: 4px 0 0;
+}
+
+.momentum-card {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 16px;
+  margin-top: 18px;
+  padding: 15px 20px;
+}
+
+.momentum-card > .eyebrow {
+  display: block;
+  grid-column: 1 / -1;
+}
+
+.momentum-card .momentum-row {
+  border-bottom: 0;
+  min-width: 0;
+}
+
+.metric-icon {
+  background: #e9efff;
+  color: #334b9e;
+}
+
+.metric-icon.peach {
+  background: #fff0e5;
+  color: #86471c;
+}
+
+.metric-icon.lilac {
+  background: #e9e6ff;
+  color: #553d99;
+}
+
+.welcome-site {
+  background: linear-gradient(180deg, #edf3ff 0, #f8faff 550px, #fff 850px);
+}
+
+.hero-workspace {
+  box-shadow: 0 24px 65px #3047a429;
+  border-color: #cdd9f3;
+  transform: none;
+}
+
+.auth-story {
+  background: linear-gradient(155deg, #151e3a, #3047a4);
+}
+
+.auth-story > small,
+.auth-pitch > p,
+.orbit-tools > div > span {
+  color: #d6e1ff;
+}
+
+.auth-pitch .eyebrow {
+  color: var(--accent);
+}
+
+.auth-pitch h1 {
+  color: #fff;
+}
+
+@media (max-width: 960px) {
+  .dashboard-top {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .dashboard-top {
+    gap: 12px;
+  }
+
+  .welcome-card {
+    min-height: 0;
+    padding: 23px;
+  }
+
+  .welcome-content {
+    max-width: 100%;
+  }
+
+  .welcome-card .tool-art {
+    display: none;
+  }
+
+  .attention-panel {
+    padding: 16px;
+  }
+
+  .momentum-card {
+    grid-template-columns: 1fr;
+    gap: 0;
+    margin-top: 12px;
+    padding: 13px 16px;
+  }
+
+  .momentum-card .momentum-row {
+    padding: 10px 0;
+  }
+}
