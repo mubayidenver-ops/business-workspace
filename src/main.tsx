@@ -1,3 +1,4 @@
+import { MfaPanel } from './MfaPanel';
 import React, {
   useEffect,
   useMemo,
@@ -97,6 +98,8 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     [name, setName] = useState(''),
     [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
+    [mfaRequired, setMfaRequired] = useState(false),
+    [code, setCode] = useState(''),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
@@ -114,7 +117,17 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     }
     setBusy(true);
     try {
-      await api('/auth', 'POST', { mode, name, email, password });
+      const result = await api<{ mfaRequired?: boolean }>('/auth', 'POST', {
+        mode,
+        name,
+        email,
+        password,
+        code,
+      });
+      if (result.mfaRequired) {
+        setMfaRequired(true);
+        return;
+      }
       await onAuth();
     } catch (e) {
       setError((e as Error).message);
@@ -218,6 +231,18 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
               </span>
             </label>
             <small className="muted">At least 10 characters. Use a unique password.</small>
+            {mfaRequired && (
+              <label>
+                Authenticator or recovery code
+                <input
+                  autoFocus
+                  autoComplete="one-time-code"
+                  maxLength={24}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+              </label>
+            )}
             <p className="error" id="auth-error" role="alert">
               {error}
             </p>
@@ -1519,6 +1544,9 @@ function App() {
               <button onClick={() => setPanel('team')}>
                 <Icons.Users size={16} /> Teams and workspaces
               </button>
+              <button onClick={() => setPanel('mfa')}>
+                <Icons.ShieldCheck size={16} /> Two-step sign-in
+              </button>
               <button onClick={() => setPanel('password')}>
                 <Icons.LockKeyhole size={16} />
                 Change password
@@ -1682,6 +1710,7 @@ function App() {
           }}
         />
       )}
+      {panel === 'mfa' && <MfaPanel close={() => setPanel('settings')} />}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
       {renewing && (
         <Modal

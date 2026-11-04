@@ -235,6 +235,33 @@ export class DynamoStore {
       new DeleteCommand({ TableName: this.table, Key: { pk: `SESSION#${token}`, sk: 'SESSION' } }),
     );
   }
+  async updateMfa(profile, mfa, invalidate) {
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: {
+            ...profile,
+            pk: 'ACCOUNT#' + profile.email,
+            sk: 'PROFILE',
+            mfa,
+            securityRevision: (profile.securityRevision || 0) + 1,
+            credentialVersion: (profile.credentialVersion || 0) + Number(invalidate),
+          },
+          ConditionExpression:
+            '#password = :expected AND (attribute_not_exists(securityRevision) OR securityRevision = :revision)',
+          ExpressionAttributeNames: { '#password': 'password' },
+          ExpressionAttributeValues: {
+            ':expected': profile.password,
+            ':revision': profile.securityRevision || 0,
+          },
+        }),
+      );
+    } catch (error) {
+      if (collision(error)) throw storageError(409, 'Sign-in settings changed. Try again.');
+      throw error;
+    }
+  }
   async changePassword(email, expectedHash, password) {
     const profile = await this.userByEmail(email);
     if (!profile || profile.password !== expectedHash)
@@ -249,10 +276,15 @@ export class DynamoStore {
             ...profile,
             password,
             credentialVersion: (profile.credentialVersion || 0) + 1,
+            securityRevision: (profile.securityRevision || 0) + 1,
           },
-          ConditionExpression: '#password = :expected',
+          ConditionExpression:
+            '#password = :expected AND (attribute_not_exists(securityRevision) OR securityRevision = :revision)',
           ExpressionAttributeNames: { '#password': 'password' },
-          ExpressionAttributeValues: { ':expected': expectedHash },
+          ExpressionAttributeValues: {
+            ':expected': expectedHash,
+            ':revision': profile.securityRevision || 0,
+          },
         }),
       );
     } catch (e) {
