@@ -1482,7 +1482,16 @@ function App() {
         </Modal>
       )}
       {panel === 'commands' && (
-        <CommandPalette tools={tools} open={navigate} close={() => setPanel('')} />
+        <CommandPalette
+          tools={tools}
+          records={state.records}
+          open={navigate}
+          openRecord={(tool, record) => {
+            setPanel('');
+            setEditing({ tool, item: record });
+          }}
+          close={() => setPanel('')}
+        />
       )}
       {panel === 'booking-series' && isOwner && (
         <BookingSeries close={() => setPanel('')} saved={saved} />
