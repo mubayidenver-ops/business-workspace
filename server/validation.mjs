@@ -1,3 +1,4 @@
+import { validateAttachment } from './attachments.mjs';
 import { byId, statuses } from '../shared/tools.mjs';
 import { calculateDocument } from '../shared/pricing.mjs';
 export function validateRecord(module, input) {
@@ -26,6 +27,7 @@ export function validateRecord(module, input) {
     throw new Error('Enter a title of 1–180 characters.');
   if (!statuses.includes(input.status)) throw new Error('Choose a valid status.');
   const data = {};
+  if (module === 'approvals') data.attachment = validateAttachment(input.data?.attachment);
   if (pricing) {
     data.lineItems = JSON.stringify(
       pricing.lines.map(({ description, quantity, rate }) => ({ description, quantity, rate })),
@@ -77,6 +79,20 @@ export function validateRecord(module, input) {
       throw new Error('Choose a valid date and time.');
     data[field.key] = value;
   }
+  if (
+    module === 'uptime' &&
+    data.intervalMinutes &&
+    (!/^\d+$/.test(data.intervalMinutes) ||
+      Number(data.intervalMinutes) < 5 ||
+      Number(data.intervalMinutes) > 1440)
+  )
+    throw new Error('Choose a whole check interval from 5 to 1440 minutes.');
+  if (
+    module === 'booking' &&
+    data.bufferMinutes &&
+    (!/^\d+$/.test(data.bufferMinutes) || Number(data.bufferMinutes) > 120)
+  )
+    throw new Error('Choose a whole buffer from 0 to 120 minutes.');
   if (module === 'booking' && Date.parse(data.end) <= Date.parse(data.start))
     throw new Error('The appointment must end after it starts.');
   if (module === 'clips' && Number(data.to) <= Number(data.from))

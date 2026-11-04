@@ -21,6 +21,7 @@ import { Welcome } from './Welcome';
 import { BusinessInsights } from './BusinessInsights';
 import { PasswordModal } from './PasswordModal';
 import { BillingPanel } from './BillingPanel';
+import { CommandPalette } from './CommandPalette';
 import './styles.css';
 import './pro.css';
 const tools = registry as Tool[];
@@ -246,7 +247,9 @@ function App() {
     category = params.get('group') || 'All tools',
     query = params.get('q') || '';
   const [mobile, setMobile] = useState(false),
-    [editing, setEditing] = useState<{ tool: Tool; item: Item | null } | null>(null),
+    [editing, setEditing] = useState<{ tool: Tool; item: Item | null; template?: Item } | null>(
+      null,
+    ),
     [archive, setArchive] = useState<Item | null>(null),
     [archiveBusy, setArchiveBusy] = useState(false),
     [archiveError, setArchiveError] = useState(''),
@@ -257,6 +260,9 @@ function App() {
       null,
     ),
     [print, setPrint] = useState<Item[] | null>(null);
+  const [quoteHistory, setQuoteHistory] = useState<{ current: Item; previous: Item[] } | null>(
+    null,
+  );
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
       return JSON.parse(
@@ -271,6 +277,18 @@ function App() {
     [page, setPage] = useState(1),
     [refreshing, setRefreshing] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!state || editing || sharing || archive || checkResult || (panel && panel !== 'commands'))
+      return;
+    function shortcut(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPanel(panel === 'commands' ? '' : 'commands');
+      }
+    }
+    window.addEventListener('keydown', shortcut);
+    return () => window.removeEventListener('keydown', shortcut);
+  }, [!!state, editing, sharing, archive, checkResult, panel]);
   const refresh = async () => {
     const data = await api<State>('/state');
     setState(data);
@@ -405,9 +423,26 @@ function App() {
   const active = state.records.filter((r) => !r.archived);
   const due = active.filter(
     (r) =>
-      r.data.due && String(r.data.due) <= today() && !['Completed', 'Cancelled'].includes(r.status),
+      r.data.due &&
+      Date.parse(String(r.data.due)) <=
+        Date.parse(today()) + Number(r.data.reminderDays || 0) * 86400000 &&
+      !['Completed', 'Cancelled'].includes(r.status) &&
+      !(
+        r.module === 'invoices' &&
+        (r.data.pauseReminders || Number(r.data.paid || 0) >= Number(r.data.amount || 0))
+      ),
   );
   const open = active.filter((r) => !['Completed', 'Cancelled'].includes(r.status));
+  const uptimeAlerts = state.checks
+    .filter(
+      (check) =>
+        (check.result.transition || check.result.changed) &&
+        active.some(
+          (record) =>
+            record.id === check.record_id && ['uptime', 'changes'].includes(record.module),
+        ),
+    )
+    .slice(0, 10);
   const currentTool = getTool(view);
   const moduleRecords = state.records.filter(
     (r) =>
@@ -541,12 +576,21 @@ function App() {
             <div className="top-actions">
               <SearchBox value={query} onChange={search} />
               <button
+                className="icon-button"
+                aria-label="Open command palette"
+                aria-keyshortcuts="Control+K Meta+K"
+                title="Open tool search (Ctrl+K or Cmd+K)"
+                onClick={() => setPanel('commands')}
+              >
+                <Icons.Command size={18} />
+              </button>
+              <button
                 className="notification-button icon-button"
-                aria-label={`Due reminders, ${due.length} items`}
+                aria-label={`Notifications, ${due.length + uptimeAlerts.length} items`}
                 onClick={() => setPanel('notifications')}
               >
                 <Icons.Bell size={20} />
-                {due.length > 0 && <span className="notification-dot" />}
+                {due.length + uptimeAlerts.length > 0 && <span className="notification-dot" />}
               </button>
               <button
                 className="avatar top-avatar"
@@ -658,6 +702,38 @@ function App() {
                     </button>
                   </section>
                 </div>
+                <section className="records-panel section">
+                  <div className="section-heading">
+                    <h2>Needs attention</h2>
+                  </div>
+                  {due.slice(0, 4).map((record) => (
+                    <button
+                      className="recent-item"
+                      key={record.id}
+                      onClick={() => setEditing({ tool: getTool(record.module), item: record })}
+                    >
+                      <Icon name={getTool(record.module).icon} />
+                      <span>
+                        <strong>{record.title}</strong>
+                        <small>Due {date(String(record.data.due))}</small>
+                      </span>
+                      <Icons.ArrowRight size={16} />
+                    </button>
+                  ))}
+                  {uptimeAlerts.length > 0 && (
+                    <button className="recent-item" onClick={() => setPanel('notifications')}>
+                      <Icons.Activity size={18} />
+                      <span>
+                        <strong>Website alerts</strong>
+                        <small>{uptimeAlerts.length} recent website events</small>
+                      </span>
+                      <Icons.ArrowRight size={16} />
+                    </button>
+                  )}
+                  {!due.length && !uptimeAlerts.length && (
+                    <p className="muted">No due reminders or recent website alerts.</p>
+                  )}
+                </section>
                 <BusinessInsights
                   records={state.records}
                   onOpen={(record) => setEditing({ tool: getTool(record.module), item: record })}
@@ -991,6 +1067,45 @@ function App() {
                                         <Icons.Share2 size={16} />
                                       </button>
                                     )}
+                                    {r.module === 'proposals' && (
+                                      <button
+                                        className="icon-button"
+                                        aria-label={'Quote revisions for ' + r.title}
+                                        onClick={async () => {
+                                          try {
+                                            const previous = await api<Item[]>(
+                                              '/records/' + r.id + '/revisions',
+                                            );
+                                            setQuoteHistory({ current: r, previous });
+                                          } catch (error) {
+                                            setNotice((error as Error).message);
+                                          }
+                                        }}
+                                      >
+                                        <Icons.History size={16} />
+                                      </button>
+                                    )}
+                                    {r.module === 'onboarding' && !r.archived && (
+                                      <button
+                                        onClick={() =>
+                                          setEditing({ tool: currentTool, item: null, template: r })
+                                        }
+                                      >
+                                        Reuse questions
+                                      </button>
+                                    )}
+                                    {r.module === 'podcasts' && (
+                                      <button
+                                        onClick={() =>
+                                          download(
+                                            'transcript.txt',
+                                            r.title + '\n\n' + String(r.data.notes || ''),
+                                          )
+                                        }
+                                      >
+                                        Transcript
+                                      </button>
+                                    )}
                                     {r.module === 'proposals' && !r.archived && (
                                       <button
                                         disabled={!!converting}
@@ -1134,6 +1249,11 @@ function App() {
                           </span>
                           <strong>{active.find((r) => r.id === c.record_id)?.title}</strong>
                           <span className="muted small">
+                            {c.result.transition === 'outage'
+                              ? 'Outage detected · '
+                              : c.result.transition === 'recovery'
+                                ? 'Recovered · '
+                                : ''}
                             {c.result.changed ? 'Change detected · ' : ''}
                             {date(c.created)} · {c.result.ms ?? '—'} ms
                           </span>
@@ -1167,6 +1287,7 @@ function App() {
         <RecordEditor
           tool={editing.tool}
           item={editing.item}
+          template={editing.template}
           onClose={() => setEditing(null)}
           onSave={saved}
         />
@@ -1207,11 +1328,10 @@ function App() {
         </Modal>
       )}
       {panel === 'notifications' && (
-        <Modal title="Due reminders" onClose={() => setPanel('')}>
+        <Modal title="Notifications" onClose={() => setPanel('')}>
           <div className="modal-body">
             <p className="muted">
-              Deadlines up to today in your local time zone. Reminders are shown here; no email has
-              been sent.
+              Upcoming and past deadlines based on each record’s reminder settings.
             </p>
             {due.map((r) => (
               <button className="recent-item" key={r.id} onClick={() => navigate(r.module)}>
@@ -1225,7 +1345,35 @@ function App() {
                 <Icons.ArrowRight size={16} />
               </button>
             ))}
-            {!due.length && (
+            {uptimeAlerts.map((check) => (
+              <button
+                className="recent-item"
+                key={check.id}
+                onClick={() => {
+                  const monitor = active.find((record) => record.id === check.record_id);
+                  setPanel('');
+                  setCheckResult({
+                    title: monitor?.title || 'Uptime monitor',
+                    value: check.result,
+                  });
+                }}
+              >
+                <Icons.Activity size={18} />
+                <span>
+                  <strong>{active.find((record) => record.id === check.record_id)?.title}</strong>
+                  <small>
+                    {check.result.changed
+                      ? 'Page changed'
+                      : check.result.transition === 'outage'
+                        ? 'Outage detected'
+                        : 'Recovered'}{' '}
+                    · {new Date(check.created).toLocaleString()}
+                  </small>
+                </span>
+                <Icons.ArrowRight size={16} />
+              </button>
+            ))}
+            {!due.length && !uptimeAlerts.length && (
               <Empty
                 title="A clear day ahead"
                 detail="Due invoices, renewals, maintenance and project deadlines will appear here."
@@ -1233,6 +1381,9 @@ function App() {
             )}
           </div>
         </Modal>
+      )}
+      {panel === 'commands' && (
+        <CommandPalette tools={tools} open={navigate} close={() => setPanel('')} />
       )}
       {panel === 'settings' && (
         <Modal title="Workspace settings" onClose={() => setPanel('')}>
@@ -1363,6 +1514,14 @@ function App() {
                 : `HTTP ${checkResult.value.status} · ${checkResult.value.ms} ms`}
             </p>
             {checkResult.value.error && <p className="error">{checkResult.value.error}</p>}
+            {checkResult.value.incident && (
+              <p>
+                Incident opened {new Date(checkResult.value.incident.opened).toLocaleString()}
+                {checkResult.value.incident.closed
+                  ? ' · Recovered ' + new Date(checkResult.value.incident.closed).toLocaleString()
+                  : ' · Ongoing at this check'}
+              </p>
+            )}
             {checkResult.value.changed !== undefined && (
               <p>
                 {checkResult.value.changed
@@ -1370,17 +1529,39 @@ function App() {
                   : 'No change detected, or this is the first successful check.'}
               </p>
             )}
+            {checkResult.value.diff && (
+              <div>
+                <h3>Previous text</h3>
+                <p className="preserve-lines wrap-anywhere">
+                  {checkResult.value.diff.before || 'No preview available'}
+                </p>
+                <h3>Current text</h3>
+                <p className="preserve-lines wrap-anywhere">
+                  {checkResult.value.diff.after || 'No preview available'}
+                </p>
+              </div>
+            )}
+            {checkResult.value.registrationExpires !== undefined && (
+              <p>
+                Domain renewal (entered manually):{' '}
+                {checkResult.value.registrationExpires
+                  ? date(checkResult.value.registrationExpires)
+                  : 'Unknown'}
+              </p>
+            )}
+            {checkResult.value.certificateExpires === null && <p>Certificate expiry: Unknown</p>}
             {checkResult.value.certificateExpires && (
               <p>Certificate expires: {date(checkResult.value.certificateExpires)}</p>
             )}
             {checkResult.value.links && (
               <div className="table-scroll">
                 <table>
-                  <caption>Link results (up to 20 links)</caption>
+                  <caption>Same-site crawl (up to 20 linked pages)</caption>
                   <thead>
                     <tr>
                       <th>URL</th>
                       <th>Result</th>
+                      <th>Referring pages</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1388,6 +1569,7 @@ function App() {
                       <tr key={i}>
                         <td className="wrap-anywhere">{l.url}</td>
                         <td>{l.error || l.status}</td>
+                        <td className="wrap-anywhere">{l.sources?.join(', ') || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1406,6 +1588,30 @@ function App() {
         />
       )}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
+      {quoteHistory && (
+        <Modal title="Quote revisions" onClose={() => setQuoteHistory(null)}>
+          <div className="modal-body">
+            {[quoteHistory.current, ...quoteHistory.previous].map((record) => (
+              <button
+                className="recent-item"
+                key={record.version}
+                onClick={() => {
+                  setQuoteHistory(null);
+                  setPrint([record]);
+                }}
+              >
+                <span>
+                  <strong>Revision {record.version}</strong>
+                  <small>
+                    {date(record.updated)} · {money(record.data.amount, record.data.currency)}
+                  </small>
+                </span>
+                <Icons.Printer size={16} />
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
       {print && (
         <div className="print-preview">
           <div className="print-toolbar">
@@ -1488,7 +1694,9 @@ function RecordSummary({ item: r }: { item: Item }) {
   if (['projects', 'invoices', 'proposals', 'catalogues', 'store', 'licences'].includes(r.module)) {
     const n =
       r.module === 'projects'
-        ? Number(r.data.amount || 0) - Number(r.data.cost || 0)
+        ? Number(r.data.amount || 0) -
+          Number(r.data.cost || 0) -
+          Number(r.data.billableHours || 0) * Number(r.data.hourlyCost || 0)
         : r.module === 'invoices'
           ? Number(r.data.amount || 0) - Number(r.data.paid || 0)
           : r.data.amount;

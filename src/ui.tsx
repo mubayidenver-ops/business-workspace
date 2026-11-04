@@ -1,3 +1,4 @@
+import { AttachmentField, AttachmentDownload } from './AttachmentField';
 import { useEffect, useRef, useState, type ReactNode, type FormEvent } from 'react';
 import { X, Search, ArrowRight } from 'lucide-react';
 import { api } from './lib';
@@ -103,22 +104,27 @@ export function Empty({
 export function RecordEditor({
   tool,
   item,
+  template,
   onClose,
   onSave,
 }: {
   tool: Tool;
   item: Item | null;
+  template?: Item;
   onClose: () => void;
   onSave: () => Promise<void>;
 }) {
   const initial = () => ({
-    title: item?.title || '',
+    title: item?.title || (template ? template.title + ' (copy)' : ''),
     status: item?.status || 'Draft',
     data: {
       ...Object.fromEntries(
         tool.fields.map((f) => {
           let val =
             item?.data[f.key] ??
+            (template && ['intakeChecklist', 'publicNotes'].includes(f.key)
+              ? template.data[f.key]
+              : undefined) ??
             (f.key === 'currency' ? 'USD' : f.type === 'checkbox' ? false : '');
           if (f.type === 'datetime-local' && typeof val === 'string' && val) {
             const d = new Date(val);
@@ -142,6 +148,7 @@ export function RecordEditor({
             taxPercent: item?.data.taxPercent || '0',
           }
         : {}),
+      ...(tool.id === 'approvals' ? { attachment: item?.data.attachment || '' } : {}),
     } as Record<string, string | boolean>,
   });
   const [form, setForm] = useState(initial);
@@ -192,8 +199,20 @@ export function RecordEditor({
     try {
       const data = { ...form.data };
       for (const f of tool.fields)
-        if (f.type === 'datetime-local' && data[f.key])
-          data[f.key] = new Date(String(data[f.key])).toISOString();
+        if (f.type === 'datetime-local' && data[f.key]) {
+          const value = String(data[f.key]);
+          if (item?.data[f.key] && value === initial().data[f.key]) {
+            data[f.key] = item.data[f.key];
+            continue;
+          }
+          const date = new Date(value);
+          const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+            .toISOString()
+            .slice(0, 16);
+          if (local !== value)
+            throw new Error('That local time does not exist. Choose a different time.');
+          data[f.key] = date.toISOString();
+        }
       await api(item ? '/records/' + item.id : '/records', item ? 'PATCH' : 'POST', {
         ...form,
         data,
@@ -301,6 +320,15 @@ export function RecordEditor({
             {['proposals', 'invoices'].includes(tool.id) && (
               <FinancialEditor data={form.data} onChange={(data) => setForm({ ...form, data })} />
             )}
+            {tool.id === 'approvals' && (
+              <AttachmentField
+                value={String(form.data.attachment || '')}
+                disabled={busy}
+                onChange={(attachment) =>
+                  setForm((previous) => ({ ...previous, data: { ...previous.data, attachment } }))
+                }
+              />
+            )}
             {item?.data.clientResponse && (
               <section className="client-response-history">
                 <span className="eyebrow">CLIENT RESPONSE</span>
@@ -321,6 +349,22 @@ export function RecordEditor({
                         </p>
                         {response.email && <p className="small">{response.email}</p>}
                         <p className="preserve-lines">{response.message}</p>
+                        {response.reviewedVersion && (
+                          <p>Reviewed revision {response.reviewedVersion}</p>
+                        )}
+                        {Array.isArray(response.intake) && (
+                          <dl>
+                            {response.intake.map(
+                              (entry: { question: string; answer: string }, index: number) => (
+                                <div key={index}>
+                                  <dt>{entry.question}</dt>
+                                  <dd>{entry.answer}</dd>
+                                </div>
+                              ),
+                            )}
+                          </dl>
+                        )}
+                        {response.attachment && <AttachmentDownload value={response.attachment} />}
                       </>
                     );
                   } catch {

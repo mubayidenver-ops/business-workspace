@@ -9,15 +9,22 @@ export function assertBooking(records, candidate) {
     return;
   const data = JSON.parse(candidate.data);
   if (
-    records.some(
-      (r) =>
-        r.id !== candidate.id &&
-        r.module === 'booking' &&
-        !r.archived &&
-        !['Cancelled', 'Completed'].includes(r.status) &&
-        data.start < JSON.parse(r.data).end &&
-        data.end > JSON.parse(r.data).start,
-    )
+    records.some((r) => {
+      if (
+        r.id === candidate.id ||
+        r.module !== 'booking' ||
+        r.archived ||
+        ['Cancelled', 'Completed'].includes(r.status)
+      )
+        return false;
+      const existing = JSON.parse(r.data);
+      const endsWithBuffer = (booking) =>
+        Date.parse(booking.end) + (Number(booking.bufferMinutes) || 0) * 60000;
+      return (
+        Date.parse(data.start) < endsWithBuffer(existing) &&
+        endsWithBuffer(data) > Date.parse(existing.start)
+      );
+    })
   ) {
     throw storageError(409, 'That time overlaps another appointment. Choose another time.');
   }

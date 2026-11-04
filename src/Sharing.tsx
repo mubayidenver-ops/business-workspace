@@ -1,3 +1,4 @@
+import { AttachmentField, AttachmentDownload } from './AttachmentField';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   Copy,
@@ -8,7 +9,7 @@ import {
   ArrowUpRight,
   LockKeyhole,
 } from 'lucide-react';
-import { api, date, money } from './lib';
+import { api, date, download, money } from './lib';
 import { Modal } from './ui';
 import { DesignerCredit } from './DesignerCredit';
 import { DocumentView } from './FinancialEditor';
@@ -24,6 +25,7 @@ export const canShare = (id: string) =>
     'catalogues',
     'testimonials',
     'uptime',
+    'podcasts',
   ].includes(id);
 export function ShareModal({ record, onClose }: { record: Item; onClose: () => void }) {
   const [meta, setMeta] = useState<{ active: boolean; expires?: number } | null>(null),
@@ -229,9 +231,18 @@ export function PublicPage({ token }: { token: string }) {
     [name, setName] = useState(''),
     [email, setEmail] = useState(''),
     [message, setMessage] = useState(''),
+    [attachment, setAttachment] = useState(''),
+    [answers, setAnswers] = useState<string[]>([]),
     [action, setAction] = useState('approve'),
     [done, setDone] = useState(false);
   const form = useRef<HTMLFormElement>(null);
+  const questions =
+    page?.module === 'onboarding'
+      ? String(page.data.intakeChecklist || '')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+      : [];
   async function request(method = 'GET', data?: unknown) {
     const response = await fetch('/api/public', {
       method,
@@ -282,7 +293,15 @@ export function PublicPage({ token }: { token: string }) {
     }
     setBusy(true);
     try {
-      await request('POST', { version: page.version, name, email, message, action });
+      await request('POST', {
+        version: page.version,
+        name,
+        email,
+        message,
+        action,
+        attachment,
+        answers,
+      });
       setDone(true);
     } catch (e) {
       setError((e as Error).message);
@@ -336,6 +355,9 @@ export function PublicPage({ token }: { token: string }) {
               />
             ) : (
               <article className="public-article">
+                {page.module === 'approvals' && (
+                  <AttachmentDownload value={String(page.data.attachment || '')} />
+                )}
                 <span className="eyebrow">{page.brand}</span>
                 <h1>{page.title}</h1>
                 {page.module === 'onboarding' ? (
@@ -364,9 +386,34 @@ export function PublicPage({ token }: { token: string }) {
                         ? `Checked ${new Date(page.check.created).toLocaleString()} · ${page.check.ms ?? '—'} ms`
                         : 'No check result is available.'}
                     </p>
-                    <p className="small muted">
-                      This shows the latest stored check, not a continuous availability guarantee.
-                    </p>
+                    <p className="small muted">Status from the latest stored check.</p>
+                    {page.check && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const status = page.check?.ok ? 'Operational' : 'Check failed';
+                          const fill = page.check?.ok ? '#17633f' : '#96332d';
+                          const timestamp =
+                            new Date(page.check!.created)
+                              .toISOString()
+                              .slice(0, 16)
+                              .replace('T', ' ') + ' UTC';
+                          download(
+                            'website-status.svg',
+                            '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="52" viewBox="0 0 240 52"><rect width="240" height="52" rx="8" fill="' +
+                              fill +
+                              '"/><g fill="white" font-family="sans-serif"><text x="12" y="21" font-size="14">' +
+                              status +
+                              '</text><text x="12" y="39" font-size="11">Checked ' +
+                              timestamp +
+                              '</text></g></svg>',
+                            'image/svg+xml',
+                          );
+                        }}
+                      >
+                        Download status badge
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>
@@ -463,6 +510,27 @@ export function PublicPage({ token }: { token: string }) {
                     ? 'This records the link holder’s decision; it is not an identity-verified electronic signature.'
                     : ''}
                 </p>
+                {questions.map((question, index) => (
+                  <label key={index}>
+                    {question}
+                    <input
+                      required
+                      maxLength={500}
+                      value={answers[index] || ''}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setAnswers((previous) =>
+                          Array.from({ length: questions.length }, (_, i) =>
+                            i === index ? value : previous[i] || '',
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                ))}
+                {page.module === 'onboarding' && (
+                  <AttachmentField value={attachment} onChange={setAttachment} disabled={busy} />
+                )}
                 <button type="submit" className="primary full" disabled={busy}>
                   {busy
                     ? 'Sending…'

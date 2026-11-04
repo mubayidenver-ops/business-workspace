@@ -1,3 +1,4 @@
+import { uptimeResult } from '../uptime.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS votes(record_id TEXT NOT NULL REFERENCES records(id),
 CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL REFERENCES users(id),key TEXT NOT NULL,hash TEXT NOT NULL,record_id TEXT NOT NULL REFERENCES records(id),PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS shares(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,record_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS payments(reference TEXT PRIMARY KEY,user_id TEXT NOT NULL,version INTEGER NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS quote_revisions(user_id TEXT NOT NULL, record_id TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(user_id,record_id,version));
 CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
   async health() {
@@ -117,10 +119,24 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       throw e;
     }
   }
+  async quoteRevisions(userId, id) {
+    return this.db
+      .prepare(
+        'SELECT payload FROM quote_revisions WHERE user_id=? AND record_id=? ORDER BY version DESC LIMIT 20',
+      )
+      .all(userId, id)
+      .map((row) => JSON.parse(row.payload));
+  }
   async updateRecord(userId, id, version, patch) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const r = changeRecord(this.records(userId), id, version, patch);
+      const records = this.records(userId);
+      const r = changeRecord(records, id, version, patch);
+      if (r.module === 'proposals') {
+        this.db
+          .prepare('INSERT INTO quote_revisions VALUES (?,?,?,?)')
+          .run(userId, id, version, JSON.stringify(records.find((row) => row.id === id)));
+      }
       this.db
         .prepare(
           'UPDATE records SET title=?,status=?,data=?,archived=?,version=?,updated=? WHERE id=? AND user_id=?',
@@ -138,25 +154,38 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
   async latestCheck(userId, id) {
     const c = this.db
-      .prepare('SELECT * FROM checks WHERE user_id=? AND record_id=? ORDER BY created DESC LIMIT 1')
+      .prepare(
+        'SELECT * FROM checks WHERE user_id=? AND record_id=? ORDER BY created DESC, rowid DESC LIMIT 1',
+      )
       .get(userId, id);
     return c ? { ...c, result: JSON.parse(c.result) } : null;
   }
   async saveCheck(record, result) {
-    this.db
-      .prepare('INSERT INTO checks VALUES(?,?,?,?,?)')
-      .run(
-        randomUUID(),
-        record.user_id,
-        record.id,
-        new Date().toISOString(),
-        JSON.stringify(result),
-      );
-    this.db
-      .prepare(
-        'DELETE FROM checks WHERE record_id=? AND id NOT IN (SELECT id FROM checks WHERE record_id=? ORDER BY created DESC LIMIT 30)',
-      )
-      .run(record.id, record.id);
+    const created = new Date().toISOString();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (record.module === 'uptime') {
+        const previous = this.db
+          .prepare(
+            'SELECT result FROM checks WHERE user_id=? AND record_id=? ORDER BY created DESC, rowid DESC LIMIT 1',
+          )
+          .get(record.user_id, record.id);
+        result = uptimeResult(record, result, previous && JSON.parse(previous.result), created);
+      }
+      this.db
+        .prepare('INSERT INTO checks VALUES(?,?,?,?,?)')
+        .run(randomUUID(), record.user_id, record.id, created, JSON.stringify(result));
+      this.db
+        .prepare(
+          'DELETE FROM checks WHERE record_id=? AND id NOT IN (SELECT id FROM checks WHERE record_id=? ORDER BY created DESC, rowid DESC LIMIT 30)',
+        )
+        .run(record.id, record.id);
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   async monitors() {
     return this.db

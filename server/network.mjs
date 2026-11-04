@@ -12,6 +12,7 @@ for (const [ip, prefix] of [
   ['172.16.0.0', 12],
   ['192.0.0.0', 24],
   ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
   ['192.168.0.0', 16],
   ['198.18.0.0', 15],
   ['198.51.100.0', 24],
@@ -22,7 +23,8 @@ for (const [ip, prefix] of [
 export function publicIPv4(ip) {
   return isIP(ip) === 4 && !blocked.check(ip, 'ipv4');
 }
-export async function safeFetch(raw, depth = 0) {
+export async function safeFetch(raw, depth = 0, allowedOrigin, signal) {
+  signal?.throwIfAborted();
   if (depth > 3) throw new Error('Too many redirects.');
   const url = new URL(raw);
   if (
@@ -32,6 +34,8 @@ export async function safeFetch(raw, depth = 0) {
     (url.port && !['80', '443'].includes(url.port))
   )
     throw new Error('Only public HTTP/HTTPS websites on standard ports can be checked.');
+  if (allowedOrigin && url.origin !== allowedOrigin)
+    throw new Error('Cross-site redirect blocked.');
   const host = url.hostname;
   if (isIP(host) === 6 || host.includes(':') || host.endsWith('.local') || host === 'localhost')
     throw new Error('Local and private websites cannot be checked.');
@@ -55,6 +59,7 @@ export async function safeFetch(raw, depth = 0) {
         lookup: (_h, options, cb) =>
           options.all ? cb(null, [{ address, family: 4 }]) : cb(null, address, 4),
         timeout: 8000,
+        signal,
       },
       (res) => {
         const chunks = [];
@@ -72,6 +77,7 @@ export async function safeFetch(raw, depth = 0) {
         res.on('end', () =>
           resolve({
             status: res.statusCode,
+            contentType: res.headers['content-type'],
             body: Buffer.concat(chunks).toString('utf8'),
             location: res.headers.location,
             certificate,

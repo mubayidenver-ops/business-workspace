@@ -1,3 +1,4 @@
+import { validateAttachment } from './attachments.mjs';
 import { storageError } from './storage/rules.mjs';
 import { documentFromData } from '../shared/pricing.mjs';
 export const shareableModules = [
@@ -10,6 +11,7 @@ export const shareableModules = [
   'catalogues',
   'testimonials',
   'uptime',
+  'podcasts',
 ];
 export function assertShareable(record) {
   if (record.archived || record.status === 'Cancelled' || !shareableModules.includes(record.module))
@@ -27,15 +29,16 @@ export function publicProjection(record, share, latest = null) {
     expires: share.expires,
   };
   const fields = {
-    proposals: ['client', 'currency', 'amount', 'notes'],
+    proposals: ['client', 'currency', 'amount', 'due', 'notes'],
     invoices: ['client', 'currency', 'amount', 'paid', 'due', 'notes'],
-    approvals: ['client', 'url', 'notes'],
-    onboarding: ['publicNotes'],
+    approvals: ['client', 'url', 'notes', 'attachment'],
+    onboarding: ['publicNotes', 'intakeChecklist'],
     portfolio: ['client', 'url', 'notes'],
     help: ['category', 'notes'],
     catalogues: ['currency', 'amount', 'url', 'notes'],
     testimonials: ['client', 'notes'],
     uptime: ['url'],
+    podcasts: ['url', 'notes'],
   }[record.module];
   result.data = Object.fromEntries(fields.map((key) => [key, d[key] ?? '']));
   if (['proposals', 'invoices'].includes(record.module)) result.document = documentFromData(d);
@@ -73,7 +76,31 @@ export function clientResponse(record, input) {
   )
     throw storageError(400, 'Enter a valid email and the details of your brief.');
   if (action === 'changes' && !message) throw storageError(400, 'Describe the changes you need.');
+  const questions =
+    action === 'brief'
+      ? (JSON.parse(record.data).intakeChecklist || '')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+      : [];
+  const answers = input.answers;
+  if (
+    questions.length &&
+    (!Array.isArray(answers) ||
+      answers.length !== questions.length ||
+      answers.some((a) => typeof a !== 'string' || !a.trim() || a.length > 500))
+  )
+    throw storageError(400, 'Answer each required intake question in 500 characters or less.');
   return {
+    reviewedVersion: record.version,
+    ...(questions.length
+      ? {
+          intake: questions.map((question, index) => ({ question, answer: answers[index].trim() })),
+        }
+      : {}),
+    ...(action === 'brief' && input.attachment
+      ? { attachment: validateAttachment(input.attachment) }
+      : {}),
     name,
     message,
     ...(action === 'brief' ? { email } : {}),

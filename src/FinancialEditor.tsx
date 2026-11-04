@@ -190,7 +190,7 @@ export function DocumentView({
         </div>
         {data.due && (
           <div>
-            <span>Due date</span>
+            <span>{module === 'proposals' ? 'Quote expiry date' : 'Due date'}</span>
             <strong>{String(data.due)}</strong>
           </div>
         )}

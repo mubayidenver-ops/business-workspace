@@ -17,7 +17,10 @@ export const tools = [
     icon: 'Activity',
     description: 'Know when your website needs attention.',
     unit: 'monitor',
-    fields: [f('url', 'Website URL', 'url', true)],
+    fields: [
+      f('url', 'Website URL', 'url', true),
+      f('intervalMinutes', 'Check interval in minutes (5–1440, default 5)', 'number'),
+    ],
     integration:
       'Checks run while the server is online. Notifications appear in this workspace; email and SMS are not connected.',
   },
@@ -30,7 +33,7 @@ export const tools = [
     unit: 'scan',
     fields: [f('url', 'Page URL', 'url', true)],
     integration:
-      'Scan a page and up to 20 of its links on demand. Full-site crawling is not included yet.',
+      'Crawl up to 20 linked pages on the same origin and see which pages refer to failed targets.',
   },
   {
     id: 'changes',
@@ -39,9 +42,13 @@ export const tools = [
     icon: 'ScanEye',
     description: 'Keep an eye on the pages that matter.',
     unit: 'page',
-    fields: [f('url', 'Page URL', 'url', true)],
-    integration:
-      'Compare page fingerprints while the server is online. Dynamic page content can trigger changes.',
+    fields: [
+      f('url', 'Page URL', 'url', true),
+      f('regionStart', 'Start of watched region (optional)'),
+      f('regionEnd', 'End of watched region (optional)'),
+      f('ignoreText', 'Ignore lines containing these phrases (one per line)', 'textarea'),
+    ],
+    integration: 'Compare visible page text and review changes in check history.',
   },
   {
     id: 'expiry',
@@ -50,7 +57,11 @@ export const tools = [
     icon: 'ShieldCheck',
     description: 'Keep renewals off your worry list.',
     unit: 'domain',
-    fields: [f('url', 'Website URL', 'url', true), f('due', 'Domain renewal date', 'date')],
+    fields: [
+      f('url', 'Website URL', 'url', true),
+      f('due', 'Domain renewal date', 'date'),
+      f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
+    ],
     integration:
       'Certificate expiry can be checked on demand. Domain renewal dates are entered manually.',
   },
@@ -80,6 +91,7 @@ export const tools = [
       f('client', 'Client', 'text', true),
       f('email', 'Contact email', 'email'),
       f('publicNotes', 'Instructions shown on the shared brief', 'textarea'),
+      f('intakeChecklist', 'Required intake questions (one per line)', 'textarea'),
       f('notes', 'Brief and requirements', 'textarea'),
     ],
   },
@@ -92,10 +104,13 @@ export const tools = [
     unit: 'invoice',
     fields: [
       f('client', 'Client', 'text', true),
+      f('reference', 'Invoice reference'),
+      f('pauseReminders', 'Pause due reminders', 'checkbox'),
       f('amount', 'Invoice amount', 'number', true),
       f('paid', 'Amount received', 'number'),
       f('currency', 'Currency code'),
       f('due', 'Payment due', 'date'),
+      f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
       f('notes', 'Payment and follow-up notes', 'textarea'),
     ],
     integration:
@@ -111,6 +126,7 @@ export const tools = [
     fields: [
       f('client', 'Client', 'text', true),
       f('amount', 'Quoted total', 'number', true),
+      f('due', 'Quote expiry date', 'date'),
       f('currency', 'Currency code'),
       f('notes', 'Scope, deliverables and terms', 'textarea'),
     ],
@@ -126,6 +142,7 @@ export const tools = [
       f('client', 'Attendee', 'text', true),
       f('start', 'Starts at', 'datetime-local', true),
       f('end', 'Ends at', 'datetime-local', true),
+      f('bufferMinutes', 'Buffer after appointment (0–120 minutes)', 'number'),
       f('notes', 'Meeting details', 'textarea'),
     ],
     integration:
@@ -142,6 +159,8 @@ export const tools = [
       f('client', 'Client'),
       f('amount', 'Revenue', 'number'),
       f('cost', 'Expenses', 'number'),
+      f('billableHours', 'Billable hours', 'number'),
+      f('hourlyCost', 'Internal cost per hour (same currency)', 'number'),
       f('currency', 'Currency code'),
       f('due', 'Deadline', 'date'),
       f('notes', 'Tasks and time notes', 'textarea'),
@@ -299,8 +318,7 @@ export const tools = [
     description: 'Give your episodes a searchable second life.',
     unit: 'episode',
     fields: [f('url', 'Episode URL', 'url'), f('notes', 'Transcript and show notes', 'textarea')],
-    integration:
-      'Edit and export transcript drafts. Speech recognition and external publishing are not connected.',
+    integration: 'Export a transcript or publish it with an expiring read-only link.',
   },
   {
     id: 'repurpose',
@@ -363,7 +381,7 @@ export const tools = [
       f('notes', 'Product description', 'textarea'),
     ],
     integration:
-      'Product preparation only. Checkout, paid downloads and subscription billing are not connected; this release cannot collect money.',
+      'Prepare your product listings. Paynow currently handles Workspace Pro access; product checkout and download delivery are separate.',
   },
   {
     id: 'licences',
@@ -377,6 +395,7 @@ export const tools = [
       f('amount', 'Renewal cost', 'number'),
       f('currency', 'Currency code'),
       f('due', 'Renews on', 'date'),
+      f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
       f('seats', 'Seats', 'number'),
       f('notes', 'Plan notes — do not enter licence secrets', 'textarea'),
     ],
@@ -391,6 +410,7 @@ export const tools = [
     fields: [
       f('client', 'Location or owner'),
       f('due', 'Next service', 'date'),
+      f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
       f('notes', 'Service instructions and history', 'textarea'),
     ],
   },

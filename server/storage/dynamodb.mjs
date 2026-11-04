@@ -1,3 +1,4 @@
+import { uptimeResult } from '../uptime.mjs';
 import { DynamoDBClient, DescribeTableCommand } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
@@ -282,10 +283,27 @@ export class DynamoStore {
       return { items, increment: 1, result: { record: r, replayed: false } };
     });
   }
+  async quoteRevisions(userId, id) {
+    return (
+      await this.query(workspace(userId), `QUOTE#${id}#`, { limit: 20, descending: true })
+    ).map(omitKeys);
+  }
   async updateRecord(userId, id, version, patch) {
     return this.mutate(userId, ({ records }) => {
       const record = changeRecord(records, id, version, patch);
-      return { items: this.recordWrites(record), result: record };
+      const items = this.recordWrites(record);
+      if (record.module === 'proposals')
+        items.push({
+          Put: {
+            TableName: this.table,
+            Item: {
+              ...records.find((row) => row.id === id),
+              pk: workspace(userId),
+              sk: 'QUOTE#' + id + '#' + String(version).padStart(12, '0'),
+            },
+          },
+        });
+      return { items, result: record };
     });
   }
   async vote(userId, id) {
@@ -320,35 +338,56 @@ export class DynamoStore {
   }
   async latestCheck(userId, id) {
     const item = await this.get(workspace(userId), `LATEST#${id}`);
-    return item && item.ttl > Math.floor(Date.now() / 1000) ? omitKeys(item) : null;
+    return item && (!item.ttl || item.ttl > Math.floor(Date.now() / 1000)) ? omitKeys(item) : null;
   }
   async saveCheck(record, result) {
-    const c = {
-      id: randomUUID(),
-      user_id: record.user_id,
-      record_id: record.id,
-      created: new Date().toISOString(),
-      result,
-      ttl: Math.floor(Date.now() / 1000) + 7 * 86400,
-    };
-    await this.doc.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Put: {
-              TableName: this.table,
-              Item: { pk: workspace(record.user_id), sk: `CHECK#${c.created}#${c.id}`, ...c },
-            },
-          },
-          {
-            Put: {
-              TableName: this.table,
-              Item: { pk: workspace(record.user_id), sk: `LATEST#${record.id}`, ...c },
-            },
-          },
-        ],
-      }),
-    );
+    const pk = workspace(record.user_id);
+    const sk = `LATEST#${record.id}`;
+    const uptime = record.module === 'uptime';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const previous = uptime ? await this.get(pk, sk) : null;
+      const c = {
+        id: randomUUID(),
+        user_id: record.user_id,
+        record_id: record.id,
+        created: new Date().toISOString(),
+        result,
+        ttl: Math.floor(Date.now() / 1000) + 7 * 86400,
+      };
+      if (uptime) c.result = uptimeResult(record, result, previous?.result, c.created);
+      const latest = { ...c, pk, sk };
+      if (uptime) delete latest.ttl;
+      try {
+        await this.doc.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Put: {
+                  TableName: this.table,
+                  Item: { pk: workspace(record.user_id), sk: `CHECK#${c.created}#${c.id}`, ...c },
+                },
+              },
+              {
+                Put: {
+                  TableName: this.table,
+                  Item: latest,
+                  ...(uptime &&
+                    (previous
+                      ? {
+                          ConditionExpression: 'id = :previous',
+                          ExpressionAttributeValues: { ':previous': previous.id },
+                        }
+                      : { ConditionExpression: 'attribute_not_exists(pk)' })),
+                },
+              },
+            ],
+          }),
+        );
+        return c.result;
+      } catch (error) {
+        if (!uptime || !collision(error) || attempt === 4) throw error;
+      }
+    }
   }
   async monitors() {
     return (await this.query('MONITORS', '', { limit: 50 })).map(omitKeys);

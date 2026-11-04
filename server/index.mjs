@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
 import { safeFetch } from './network.mjs';
+import { checkInterval } from './uptime.mjs';
+import { crawlLinks, comparePage } from './website-checks.mjs';
 import { assertShareable, publicProjection, clientResponse } from './public-sharing.mjs';
 import { Billing } from './billing.mjs';
 
@@ -66,59 +68,34 @@ async function check(record) {
   let result;
   try {
     const d = JSON.parse(record.data);
-    const page = await safeFetch(d.url);
+    const page = await safeFetch(
+      d.url,
+      0,
+      record.module === 'links' ? new URL(d.url).origin : undefined,
+    );
     result = {
       status: page.status,
       ms: page.ms,
       url: page.url,
       ok: page.status >= 200 && page.status < 400,
     };
-    if (record.module === 'changes') {
-      result.fingerprint = createHash('sha256').update(page.body).digest('hex');
+    if (record.module === 'changes' && result.ok) {
       const previous = await store.latestCheck(record.user_id, record.id);
-      const prev = previous?.result;
-      result.changed = !!prev?.fingerprint && prev.fingerprint !== result.fingerprint;
+      Object.assign(result, comparePage(page, d, previous?.result));
     }
-    if (record.module === 'expiry') result.certificateExpires = page.certificate;
-    if (record.module === 'links') {
-      const hrefs = [...page.body.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]);
-      const urls = [
-        ...new Set(
-          hrefs
-            .filter((h) => !h.startsWith('#') && h.length <= 2048)
-            .map((h) => {
-              try {
-                const u = new URL(h, page.url);
-                return ['http:', 'https:'].includes(u.protocol) ? u.href : null;
-              } catch {
-                return null;
-              }
-            })
-            .filter(Boolean),
-        ),
-      ].slice(0, 20);
-      result.links = [];
-      for (let i = 0; i < urls.length; i += 4) {
-        const group = await Promise.all(
-          urls.slice(i, i + 4).map(async (url) => {
-            try {
-              const r = await safeFetch(url);
-              return { url, status: r.status };
-            } catch {
-              return { url, error: 'Unavailable or blocked by safety limits' };
-            }
-          }),
-        );
-        result.links.push(...group);
-      }
+    if (record.module === 'expiry') {
+      result.certificateExpires = page.certificate;
+      result.registrationExpires = d.due || null;
     }
+    if (record.module === 'links') result.links = await crawlLinks(page);
   } catch (e) {
     result = { ok: false, error: e.message };
+  }
+  try {
+    return await store.saveCheck(record, result);
   } finally {
     checking.delete(record.id);
   }
-  await store.saveCheck(record, result);
-  return result;
 }
 let vite;
 if (process.argv.includes('--dev') || !existsSync(resolve(root, 'dist/index.html'))) {
@@ -375,9 +352,16 @@ const server = createServer(async (req, res) => {
       json(res, saved.replayed ? 200 : 201, toRecord(saved.record));
       return;
     }
-    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert))?$/.exec(url.pathname);
+    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions))?$/.exec(
+      url.pathname,
+    );
     if (match) {
       const r = await own(user, match[1]);
+      if (match[2] === 'revisions' && req.method === 'GET') {
+        if (r.module !== 'proposals') throw fail(404, 'Quote history is unavailable.');
+        json(res, 200, (await store.quoteRevisions(user.id, r.id)).map(toRecord));
+        return;
+      }
       if (match[2] === 'share') {
         if (req.method === 'GET') {
           const share = await store.shareForRecord(user.id, r.id);
@@ -401,8 +385,14 @@ const server = createServer(async (req, res) => {
             throw fail(409, 'This record changed. Refresh before sharing.');
           const days = Number(b.days ?? 7);
           if (![1, 7, 30].includes(days)) throw fail(400, 'Choose a supported link expiry.');
-          const token = randomBytes(32).toString('hex'),
-            expires = Date.now() + days * 86400000;
+          const token = randomBytes(32).toString('hex');
+          const quoteExpiry = r.module === 'proposals' && JSON.parse(r.data).due;
+          const expires = Math.min(
+            Date.now() + days * 86400000,
+            quoteExpiry ? Date.parse(quoteExpiry + 'T00:00:00Z') + 86400000 : Infinity,
+          );
+          if (expires <= Date.now())
+            throw fail(400, 'This quote has expired. Update its expiry date before sharing.');
           await store.createShare(user.id, r.id, r.version, {
             hash: sessionHash(token),
             user_id: user.id,
@@ -511,7 +501,7 @@ const interval = setInterval(async () => {
     const monitors = await store.monitors();
     for (const r of monitors) {
       const last = await store.latestCheck(r.user_id, r.id);
-      if (!last || Date.now() - Date.parse(last.created) > 300000) await check(r);
+      if (!last || Date.now() - Date.parse(last.created) >= checkInterval(r)) await check(r);
     }
   } catch (e) {
     console.error('Scheduled checks will retry on the next cycle.');

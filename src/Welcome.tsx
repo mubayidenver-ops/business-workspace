@@ -268,7 +268,7 @@ export function Welcome() {
             Create your workspace
             <ArrowRight size={17} />
           </a>
-          <span className="small muted">Development preview · No subscription billing enabled</span>
+          <span className="small muted">Free workspace · Optional paid Pro access</span>
         </section>
       </main>
       <footer className="site-footer">

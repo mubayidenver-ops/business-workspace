@@ -558,3 +558,29 @@ test('logout invalidates the server session', async () => {
   assert.equal((await req('/logout', 'POST', {}, cookieB)).status, 200);
   assert.equal((await req('/state', 'GET', undefined, cookieB)).status, 401);
 });
+
+test('quote revision history preserves the saved totals and stays private', async () => {
+  const input = {
+    module: 'proposals',
+    title: 'Original quote',
+    status: 'Draft',
+    data: { client: 'Client', amount: '100', currency: 'USD' },
+  };
+  const created = await req('/records', 'POST', input, cookieA);
+  assert.equal(created.status, 201);
+  const route = '/records/' + created.data.id;
+  const edit = await req(
+    route,
+    'PATCH',
+    { ...input, version: 1, title: 'Revised quote', data: { ...input.data, amount: '120' } },
+    cookieA,
+  );
+  assert.equal(edit.status, 200);
+  assert.equal((await req(route + '/revisions')).status, 401);
+  const history = await req(route + '/revisions', 'GET', undefined, cookieA);
+  assert.equal(history.status, 200);
+  assert.deepEqual(
+    history.data.map(({ title, version, data }) => [title, version, data.amount]),
+    [['Original quote', 1, '100']],
+  );
+});

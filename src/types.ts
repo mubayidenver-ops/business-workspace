@@ -33,7 +33,11 @@ export type Check = {
     ms?: number;
     error?: string;
     changed?: boolean;
-    certificateExpires?: string;
-    links?: { url: string; status?: number; error?: string }[];
+    transition?: 'outage' | 'recovery';
+    incident?: { id: string; opened: string; closed?: string };
+    certificateExpires?: string | null;
+    registrationExpires?: string | null;
+    diff?: { before: string; after: string };
+    links?: { url: string; status?: number; error?: string; sources?: string[] }[];
   };
 };
