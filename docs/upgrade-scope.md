@@ -35,9 +35,9 @@ This release extends Business Workspace in place. It keeps the existing React an
 | Portfolio              | Printable records and searchable shared collections                                                  | Permanent custom-domain sites                                           |
 | Digital store          | Product records and expiring manual delivery links for small files                                   | Seller checkout, automatic fulfillment and large files                  |
 
-Platform additions include a Needs attention list, Ctrl/Cmd+K tool search and automated GitHub checks. Remaining platform work includes organization lifecycle management, Postgres RLS, SSO/MFA/SCIM, durable queues and private object storage, advanced billing, tenant-wide AI search and automation, expanded localization and accessibility verification, regional hosting, analytics, disaster recovery and launch operations.
+Platform additions include a Needs attention list, Ctrl/Cmd+K tool search and automated GitHub checks. Remaining platform work includes organization lifecycle management, Postgres RLS, SSO/SCIM, durable queues and private object storage, advanced billing, tenant-wide AI search and automation, expanded localization and accessibility verification, regional hosting, analytics, disaster recovery and launch operations.
 
-Run `npm test` and `npm run build`. For DynamoDB coverage, start a local emulator and run the full Node test suite with `NODE_ENV=test` and `DYNAMODB_TEST_ENDPOINT` set to its loopback URL. The suite never uses a production table. The final storage run passed 62 tests.
+Run `npm test` and `npm run build`. For DynamoDB coverage, start a local emulator and run the full Node test suite with `NODE_ENV=test` and `DYNAMODB_TEST_ENDPOINT` set to its loopback URL. The suite never uses a production table. The final storage run passed 64 tests.
 
 To verify the workflows, open Website tools, create an active uptime monitor and run a check. Try the broken-link checker on a public same-origin fixture and review referring pages. Create a quote, revise its total and open its history to print the earlier revision. Create an onboarding draft with questions, share it and submit a completed brief using the guest link. In-app notifications reflect recorded check events and date reminders.
 
@@ -55,10 +55,16 @@ Provider documentation: [send email](https://resend.com/docs/api-reference/email
 
 ## Teams, AI drafts and renewals
 
-Open Teams and workspaces from the sidebar workspace switcher. Ask an existing account holder for the email and account ID shown in their account settings. A workspace owner can grant viewer or editor access and revoke it. Billing, guest sharing, archiving, manual website checks and scheduled invoice emails stay owner-only. The recipient chooses a joined workspace from the same menu. Recent grants, role changes and revocations are recorded for the owner. This version uses application roles, with no external identity provider.
+Open Teams and workspaces from the sidebar workspace switcher. Ask an existing account holder for the email and account ID shown in their account settings. A workspace owner can grant viewer or editor access and revoke it. Billing, guest sharing, archiving, manual website checks and scheduled invoice emails stay owner-only. The recipient chooses a joined workspace from the same menu. Recent grants, role changes and revocations are recorded for the owner. This version uses application roles and supports authenticator MFA for local accounts.
 
 To enable AI drafts for specified workspaces, configure `OPENAI_API_KEY`, `OPENAI_MODEL` and comma-separated owner IDs in `AI_WORKSPACES` in Render. Drafting is off until all settings are present. Owners can generate drafts or summaries for proposals, invoices, meetings, feedback, testimonials and repurposing. They review the exact notes before sending. Only those notes go to the provider. Outputs are editable downloads. They do not change records or send messages. Provider calls were simulated during tests. [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
 
 On Equipment or Software renewals, set the repeat interval and use Record completion. The app saves the completion date and calculates the next due date from it. On Domain and certificate tracker, enter the registered domain and run a check. A manual date overrides registry lookup. Missing registry or certificate dates display as unknown. [IANA RDAP bootstrap](https://www.iana.org/assignments/rdap-dns)
 
 On Appointment booking, use **Reserve recurring slots** to save 2–13 daily, weekly or fortnightly slots in one transaction. A conflict rejects the full series. Share an offered slot and select additional times to publish an expiring group link. Guests see the remaining slots in their local time zone. Each slot can be claimed once. Revoking the group link stops further bookings.
+
+## Two-step sign-in
+
+Open Workspace settings → Two-step sign-in. Verify the current password, add the setup key to a time-based authenticator, and confirm a current code. Save the one-use recovery codes before signing in again. Enabling or disabling MFA invalidates existing sessions. The app rejects reused time steps and atomically consumes recovery codes.
+
+Deploy with a stable 32-byte hex `MFA_ENCRYPTION_KEY` in the host secret settings. Preserve that key with your recovery materials. Recovery codes are stored as hashes. The authenticated setup key is encrypted at rest. Roll forward with an MFA-aware version after anyone enrolls. Earlier builds do not enforce the new sign-in policy.

@@ -16,6 +16,7 @@ before(async () => {
       ...process.env,
       DATA_DIR: dir,
       PORT: '0',
+      MFA_ENCRYPTION_KEY: 'ab'.repeat(32),
       STORAGE_BACKEND: dynamo ? 'dynamodb' : 'sqlite',
       ...(dynamo
         ? {
@@ -831,4 +832,47 @@ test('recurring reservations are atomic and group links confirm one guest per sl
   assert.deepEqual((await guest(token)).data.slots, []);
   assert.equal((await req(path, 'DELETE', {}, cookieA)).status, 200);
   assert.equal((await guest(token)).status, 410);
+});
+
+test('MFA enrolment invalidates old sessions and rejects reused codes', async () => {
+  const { unseal, totp } = await import('../server/mfa.mjs');
+  const email = 'mfa@example.com';
+  const password = 'unique-authenticator-password';
+  const account = await req('/auth', 'POST', {
+    mode: 'register',
+    name: 'MFA test',
+    email,
+    password,
+  });
+  assert.equal(account.status, 200);
+  const login = (code) => req('/auth', 'POST', { mode: 'login', email, password, code });
+  const setup = await req('/mfa', 'POST', { action: 'setup', password }, account.cookie);
+  assert.equal(setup.status, 200);
+  const { secret } = unseal(setup.data.token, Buffer.from('ab'.repeat(32), 'hex'));
+  const code = totp(secret, Math.floor(Date.now() / 30000));
+  const enabled = await req(
+    '/mfa',
+    'POST',
+    { action: 'enable', password, token: setup.data.token, code },
+    account.cookie,
+  );
+  assert.equal(enabled.status, 200);
+  assert.equal(enabled.data.recoveryCodes.length, 8);
+  assert.equal((await req('/state', 'GET', undefined, account.cookie)).status, 401);
+  const challenge = await login();
+  assert.equal(challenge.data.mfaRequired, true);
+  assert.equal(challenge.cookie, undefined);
+  assert.equal((await login(code)).status, 401);
+  const [first, second] = enabled.data.recoveryCodes;
+  const attempts = await Promise.all([login(first), login(first)]);
+  assert.equal(attempts.filter((result) => result.cookie).length, 1);
+  const cookie = attempts.find((result) => result.cookie).cookie;
+  assert.equal((await req('/state', 'GET', undefined, cookie)).status, 200);
+  assert.equal((await login(first)).status, 401);
+  assert.equal(
+    (await req('/mfa', 'POST', { action: 'disable', password, code: second }, cookie)).status,
+    200,
+  );
+  assert.equal((await req('/state', 'GET', undefined, cookie)).status, 401);
+  assert.ok((await login()).cookie);
 });

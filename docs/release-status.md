@@ -22,7 +22,7 @@ This is a runnable first development release, not a launched paid service. All 3
 - Invoice balance and project profit calculations; quotation amounts and printable records.
 - Appointment conflict prevention; due-date notifications displayed in-app.
 - Feedback votes: one per account in the app, and one per browser on the public feedback board.
-- Account security: authenticator-app (TOTP) two-factor sign-in with replay protection and 8 single-use recovery codes, sign out of every session, and password-confirmed account deletion that removes the owner's workspace and team memberships. Public pages and booking availability are managed by the workspace owner.
+- Account security (two-step sign-in is `main`'s MFA): sign out of every session, and password- and authenticator-confirmed account deletion that removes the owner's workspace and team memberships. Public pages and booking availability are managed by the workspace owner.
 - Public workspace pages (one link per type, replaceable): feedback board with voting and moderated submissions, testimonial wall with moderated consented submissions, searchable help centre, uptime status page, and a booking page.
 - Bookings: weekly availability windows in a chosen time zone (DST-aware) with slot length, buffer, minimum notice and horizon; guests receive a private link to reschedule or cancel.
 - Projects: per-project timesheets (billable/non-billable hours, billable rate) and a cross-project profit report with per-currency totals and CSV export.

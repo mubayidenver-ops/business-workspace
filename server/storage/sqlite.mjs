@@ -16,6 +16,7 @@ export class SQLiteStore {
     this.db = new DatabaseSync(resolve(directory, 'workspace.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS user_security(user_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, version INTEGER NOT NULL, mfa TEXT);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),module TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,archived INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL,updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS checks(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),record_id TEXT NOT NULL REFERENCES records(id) ON DELETE CASCADE,created TEXT NOT NULL,result TEXT NOT NULL);
@@ -195,8 +196,13 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
     this.db.prepare('SELECT 1').get();
   }
   async userByEmail(email) {
-    const user = this.db.prepare('SELECT * FROM users WHERE email=?').get(email);
+    const user = this.db
+      .prepare(
+        'SELECT u.*, COALESCE(s.revision,0) AS securityRevision, COALESCE(s.version,0) AS credentialVersion, s.mfa FROM users u LEFT JOIN user_security s ON u.id=s.user_id WHERE u.email=?',
+      )
+      .get(email);
     if (!user) return user;
+    if (user.mfa) user.mfa = JSON.parse(user.mfa);
     return { ...user, security: user.security ? JSON.parse(user.security) : { version: 0 } };
   }
   async createUser(user) {
@@ -211,7 +217,19 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
     }
   }
   async createSession(token, user, expires) {
-    this.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(token, user.id, expires);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const latest =
+        this.db.prepare('SELECT version FROM user_security WHERE user_id=?').get(user.id)
+          ?.version || 0;
+      if (latest !== (user.credentialVersion || 0))
+        throw storageError(409, 'Sign-in settings changed. Try again.');
+      this.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(token, user.id, expires);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
   async sessionUser(token) {
     return (
@@ -225,6 +243,33 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   async deleteSession(token) {
     this.db.prepare('DELETE FROM sessions WHERE token=?').run(token);
   }
+  async updateMfa(profile, mfa, invalidate) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const user = this.db.prepare('SELECT password FROM users WHERE id=?').get(profile.id);
+      const security = this.db
+        .prepare('SELECT revision,version FROM user_security WHERE user_id=?')
+        .get(profile.id);
+      if (
+        user?.password !== profile.password ||
+        (security?.revision || 0) !== (profile.securityRevision || 0)
+      )
+        throw storageError(409, 'Sign-in settings changed. Try again.');
+      this.db
+        .prepare('INSERT OR REPLACE INTO user_security VALUES (?,?,?,?)')
+        .run(
+          profile.id,
+          (security?.revision || 0) + 1,
+          (security?.version || 0) + Number(invalidate),
+          mfa ? JSON.stringify(mfa) : null,
+        );
+      if (invalidate) this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(profile.id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
   async changePassword(email, expectedHash, password) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -237,6 +282,11 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
           'Your account changed. Sign in again before changing the password.',
         );
       this.db.prepare('UPDATE users SET password=? WHERE id=?').run(password, user.id);
+      this.db
+        .prepare(
+          'INSERT INTO user_security VALUES (?,1,1,NULL) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1,version=version+1',
+        )
+        .run(user.id);
       this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
       this.db.exec('COMMIT');
     } catch (e) {

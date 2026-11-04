@@ -1,3 +1,4 @@
+import { mfaKey, seal, unseal, base32, matchStep, recoveryHash, verifyMfa } from './mfa.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -236,15 +237,19 @@ const server = createServer(async (req, res) => {
         const actual = scryptSync(password, salt, 64);
         if (!u || !timingSafeEqual(actual, Buffer.from(u.password.split(':')[1], 'hex')))
           throw fail(401, 'Email or password is incorrect.');
-        if (u.security?.totp) {
-          if (!b.code)
-            throw Object.assign(fail(401, 'Enter the code from your authenticator app.'), {
-              extra: { twoFactorRequired: true },
-            });
-          if (!(await features.secondFactor(u, String(b.code))))
-            throw Object.assign(fail(401, 'That code is incorrect or was already used.'), {
-              extra: { twoFactorRequired: true },
-            });
+        if (u.mfa) {
+          if (!b.code) {
+            json(res, 200, { mfaRequired: true });
+            return;
+          }
+          let next;
+          try {
+            next = verifyMfa(u, b.code, mfaKey());
+          } catch {
+            throw fail(503, 'Authenticator verification is unavailable.');
+          }
+          if (!next) throw fail(401, 'Enter an unused authenticator or recovery code.');
+          await store.updateMfa(u, next, false);
         }
       }
       const token = randomBytes(32).toString('hex');
@@ -392,6 +397,74 @@ const server = createServer(async (req, res) => {
     const actor = await userFor(req);
     if (!actor) throw fail(401, 'Sign in to open your workspace.');
     let user = actor;
+    if (url.pathname === '/api/mfa') {
+      const profile = await store.userByEmail(actor.email);
+      const key = mfaKey();
+      if (req.method === 'GET') {
+        json(res, 200, { enabled: Boolean(profile.mfa), available: Boolean(key) });
+        return;
+      }
+      if (req.method !== 'POST') throw fail(405, 'This security action is not available.');
+      if (!key) throw fail(503, 'Authenticator setup is unavailable.');
+      rate('mfa:' + actor.id, 10);
+      const input = await body(req);
+      const password = String(input.password || '');
+      const [salt, expected] = profile.password.split(':');
+      if (
+        password.length < 10 ||
+        password.length > 128 ||
+        !timingSafeEqual(scryptSync(password, salt, 64), Buffer.from(expected, 'hex'))
+      )
+        throw fail(401, 'Enter your current password.');
+      if (input.action === 'setup' && !profile.mfa) {
+        const bytes = randomBytes(20);
+        const token = seal(
+          { account: actor.id, secret: bytes.toString('hex'), expires: Date.now() + 600000 },
+          key,
+        );
+        json(res, 200, { token, secret: base32(bytes) });
+        return;
+      }
+      if (input.action === 'enable' && !profile.mfa) {
+        let enrollment;
+        try {
+          enrollment = unseal(input.token, key);
+        } catch {
+          throw fail(400, 'Start authenticator setup again.');
+        }
+        if (enrollment.account !== actor.id || enrollment.expires <= Date.now())
+          throw fail(400, 'Start authenticator setup again.');
+        const step = matchStep(enrollment.secret, input.code);
+        if (step === null) throw fail(400, 'Enter a current six-digit authenticator code.');
+        const recoveryCodes = Array.from({ length: 8 }, () => randomBytes(12).toString('hex'));
+        const mfa = {
+          secret: seal({ account: actor.id, secret: enrollment.secret }, key),
+          step,
+          recovery: recoveryCodes.map(recoveryHash),
+        };
+        await store.updateMfa(profile, mfa, true);
+        json(
+          res,
+          200,
+          { recoveryCodes },
+          { 'Set-Cookie': 'bw_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' },
+        );
+        return;
+      }
+      if (input.action === 'disable' && profile.mfa) {
+        if (!verifyMfa(profile, input.code, key))
+          throw fail(401, 'Enter an unused authenticator or recovery code.');
+        await store.updateMfa(profile, null, true);
+        json(
+          res,
+          200,
+          { disabled: true },
+          { 'Set-Cookie': 'bw_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' },
+        );
+        return;
+      }
+      throw fail(409, 'Authenticator settings have changed. Reload and try again.');
+    }
     if (await features.accountRoute(req, res, url, actor)) return;
     if (url.pathname === '/api/password' && req.method === 'POST') {
       rate('password:' + user.id, 10);

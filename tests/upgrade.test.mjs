@@ -222,3 +222,13 @@ test('RDAP uses the trusted bootstrap and returns only a matching domain expiry'
     'https://registry.example/rdap/domain/other.com',
   ]);
 });
+
+test('authenticator matches the RFC 6238 SHA-1 vector and rejects replay', async () => {
+  const { totp, matchStep, base32 } = await import('../server/mfa.mjs');
+  const bytes = Buffer.from('12345678901234567890');
+  const secret = bytes.toString('hex');
+  assert.equal(base32(bytes), 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+  assert.equal(totp(secret, 1), '287082');
+  assert.equal(matchStep(secret, '287082', -1, 59000), 1);
+  assert.equal(matchStep(secret, '287082', 1, 59000), null);
+});

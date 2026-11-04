@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { validateRecord } from './validation.mjs';
-import { newSecret, otpauthURL, verifyTotp, newRecoveryCodes, useRecoveryCode } from './totp.mjs';
+import { mfaKey, verifyMfa } from './mfa.mjs';
 import { validateAvailability, availableSlots } from '../shared/availability.mjs';
 
 const rank = { viewer: 1, editor: 2, owner: 3 };
@@ -36,17 +36,15 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
 
   /** Verifies an authenticator or recovery code and records it so it cannot be reused. */
   async function secondFactor(profile, code) {
-    const security = profile.security || { version: 0 };
-    if (!security.totp) return true;
-    const step = verifyTotp(security.totp.secret, code, security.totp.lastStep ?? -1);
+    if (!profile.mfa) return true;
     let next;
-    if (step !== null) next = { ...security, totp: { ...security.totp, lastStep: step } };
-    else {
-      const remaining = useRecoveryCode(security.recoveryCodes, code);
-      if (!remaining) return false;
-      next = { ...security, recoveryCodes: remaining };
+    try {
+      next = verifyMfa(profile, code, mfaKey());
+    } catch {
+      throw fail(503, 'Authenticator verification is unavailable.');
     }
-    await store.setSecurity(profile.email, security.version || 0, next);
+    if (!next) return false;
+    await store.updateMfa(profile, next, false);
     return true;
   }
 
@@ -292,55 +290,8 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     const m = req.method;
     if (path === '/api/security' && m === 'GET') {
       const profile = await store.userByEmail(user.email);
-      json(res, 200, {
-        totp: !!profile.security?.totp,
-        recoveryCodesLeft: profile.security?.recoveryCodes?.length || 0,
-      });
+      json(res, 200, { mfa: !!profile.mfa });
       return true;
-    }
-    if (path.startsWith('/api/security/totp/') && m === 'POST') {
-      rate('totp:' + user.id, 20);
-      const input = await body(req);
-      const profile = await store.userByEmail(user.email);
-      const security = profile.security || { version: 0 };
-      const action = path.slice('/api/security/totp/'.length);
-      if (action === 'setup') {
-        if (security.totp) throw fail(409, 'Two-factor authentication is already on.');
-        const secret = newSecret();
-        await store.setSecurity(user.email, security.version || 0, {
-          ...security,
-          pendingSecret: secret,
-        });
-        json(res, 200, { secret, uri: otpauthURL(secret, user.email) });
-        return true;
-      }
-      if (action === 'enable') {
-        if (security.totp) throw fail(409, 'Two-factor authentication is already on.');
-        if (!security.pendingSecret) throw fail(400, 'Start the setup again.');
-        const step = verifyTotp(security.pendingSecret, input.code);
-        if (step === null)
-          throw fail(400, 'That code did not match. Check the time on your phone and try again.');
-        const { codes, hashes } = newRecoveryCodes();
-        const { pendingSecret, ...rest } = security;
-        await store.setSecurity(user.email, security.version || 0, {
-          ...rest,
-          totp: { secret: pendingSecret, lastStep: step, enabled: new Date().toISOString() },
-          recoveryCodes: hashes,
-        });
-        json(res, 200, { enabled: true, recoveryCodes: codes });
-        return true;
-      }
-      if (action === 'disable') {
-        if (!security.totp) throw fail(409, 'Two-factor authentication is already off.');
-        if (!verifyPassword(profile, input.password)) throw fail(400, 'The password is incorrect.');
-        if (!(await secondFactor(profile, input.code)))
-          throw fail(400, 'Enter a valid authenticator or recovery code.');
-        const fresh = (await store.userByEmail(user.email)).security;
-        const { totp, recoveryCodes, pendingSecret, ...rest } = fresh;
-        await store.setSecurity(user.email, fresh.version, rest);
-        json(res, 200, { enabled: false });
-        return true;
-      }
     }
     if (path === '/api/security/sessions/revoke' && m === 'POST') {
       await store.revokeSessions(user);
@@ -419,5 +370,5 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     return false;
   }
 
-  return { publicRoute, accountRoute, workspaceRoute, secondFactor, createManageToken };
+  return { publicRoute, accountRoute, workspaceRoute, createManageToken };
 }

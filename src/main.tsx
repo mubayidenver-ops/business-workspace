@@ -1,3 +1,4 @@
+import { MfaPanel } from './MfaPanel';
 import React, {
   useEffect,
   useMemo,
@@ -101,10 +102,10 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     [name, setName] = useState(''),
     [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
+    [mfaRequired, setMfaRequired] = useState(false),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
     [code, setCode] = useState(''),
-    [twoFactor, setTwoFactor] = useState(false),
     [error, setError] = useState('');
   const ref = useRef<HTMLFormElement>(null);
   async function submit(e: FormEvent) {
@@ -120,10 +121,19 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     }
     setBusy(true);
     try {
-      await api('/auth', 'POST', { mode, name, email, password, ...(twoFactor ? { code } : {}) });
+      const result = await api<{ mfaRequired?: boolean }>('/auth', 'POST', {
+        mode,
+        name,
+        email,
+        password,
+        code,
+      });
+      if (result.mfaRequired) {
+        setMfaRequired(true);
+        return;
+      }
       await onAuth();
     } catch (e) {
-      if ((e as { twoFactorRequired?: boolean }).twoFactorRequired) setTwoFactor(true);
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -225,15 +235,15 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
               </span>
             </label>
             <small className="muted">At least 10 characters. Use a unique password.</small>
-            {twoFactor && (
+            {mfaRequired && (
               <label>
                 Authenticator or recovery code
                 <input
                   autoFocus
                   autoComplete="one-time-code"
+                  maxLength={24}
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
-                  required
                 />
               </label>
             )}
@@ -1545,7 +1555,7 @@ function App() {
                 <dt>Security</dt>
                 <dd>
                   <button className="link-button" onClick={() => setPanel('security')}>
-                    Two-factor, sessions, account deletion
+                    Sign out everywhere, account deletion
                   </button>
                 </dd>
               </div>
@@ -1581,6 +1591,9 @@ function App() {
             <div className="actions">
               <button onClick={() => setPanel('team')}>
                 <Icons.Users size={16} /> Teams and workspaces
+              </button>
+              <button onClick={() => setPanel('mfa')}>
+                <Icons.ShieldCheck size={16} /> Two-step sign-in
               </button>
               <button onClick={() => setPanel('password')}>
                 <Icons.LockKeyhole size={16} />
@@ -1745,6 +1758,7 @@ function App() {
           }}
         />
       )}
+      {panel === 'mfa' && <MfaPanel close={() => setPanel('settings')} />}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
       {panel === 'security' && (
         <SecurityPanel user={state.user} onClose={() => setPanel('settings')} />

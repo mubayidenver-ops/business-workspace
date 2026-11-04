@@ -1,21 +1,21 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Copy, ShieldCheck, Trash2, UserPlus, LogOut } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Trash2, LogOut } from 'lucide-react';
 import { Modal } from './ui';
-import { api, date } from './lib';
+import { api } from './lib';
 import type { User } from './types';
 
 export function SecurityPanel({ user, onClose }: { user: User; onClose: () => void }) {
-  const [status, setStatus] = useState<{ totp: boolean; recoveryCodesLeft: number } | null>(null),
-    [setup, setSetup] = useState<{ secret: string; uri: string } | null>(null),
-    [codes, setCodes] = useState<string[]>([]),
+  const [mfa, setMfa] = useState(false),
     [code, setCode] = useState(''),
     [password, setPassword] = useState(''),
     [confirm, setConfirm] = useState(''),
-    [mode, setMode] = useState<'' | 'disable' | 'delete'>(''),
+    [deleting, setDeleting] = useState(false),
     [error, setError] = useState('');
-  const load = () => api<typeof status>('/security').then(setStatus, (e) => setError(e.message));
   useEffect(() => {
-    load();
+    api<{ mfa: boolean }>('/security').then(
+      (s) => setMfa(s.mfa),
+      (e) => setError(e.message),
+    );
   }, []);
   async function act(work: () => Promise<unknown>) {
     setError('');
@@ -26,78 +26,8 @@ export function SecurityPanel({ user, onClose }: { user: User; onClose: () => vo
     }
   }
   return (
-    <Modal title="Account security" onClose={onClose}>
+    <Modal title="Sessions and account" onClose={onClose}>
       <div className="modal-body">
-        <h3>
-          <ShieldCheck size={18} /> Two-factor authentication
-        </h3>
-        {codes.length > 0 ? (
-          <div className="copy-box">
-            <p>
-              Two-factor authentication is on. Save these recovery codes somewhere safe. Each works
-              once if you lose your phone. They will not be shown again.
-            </p>
-            <code>{codes.join('\n')}</code>
-            <button onClick={() => navigator.clipboard.writeText(codes.join('\n'))}>
-              <Copy size={16} /> Copy codes
-            </button>
-          </div>
-        ) : status?.totp ? (
-          <p className="muted">
-            On. {status.recoveryCodesLeft} recovery code{status.recoveryCodesLeft === 1 ? '' : 's'}{' '}
-            left.
-          </p>
-        ) : setup ? (
-          <form
-            className="form-grid"
-            onSubmit={(e) => {
-              e.preventDefault();
-              act(async () => {
-                const r = await api<{ recoveryCodes: string[] }>('/security/totp/enable', 'POST', {
-                  code,
-                });
-                setCodes(r.recoveryCodes);
-                setSetup(null);
-                setCode('');
-                await load();
-              });
-            }}
-          >
-            <p>
-              Add this key to an authenticator app (Google Authenticator, 1Password, Authy…), or
-              open the link on your phone.
-            </p>
-            <code className="secret">{setup.secret.match(/.{1,4}/g)?.join(' ')}</code>
-            <a href={setup.uri}>Open in authenticator app</a>
-            <label>
-              6-digit code from the app
-              <input
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                required
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-              />
-            </label>
-            <button className="primary" type="submit">
-              Turn on
-            </button>
-          </form>
-        ) : (
-          <>
-            <p className="muted">Off. Add a code from your phone to every sign-in.</p>
-            <button
-              onClick={() =>
-                act(async () => setSetup(await api('/security/totp/setup', 'POST', {})))
-              }
-            >
-              Set up authenticator app
-            </button>
-          </>
-        )}
-        {status?.totp && !codes.length && mode !== 'disable' && (
-          <button onClick={() => setMode('disable')}>Turn off two-factor</button>
-        )}
         <h3>Sessions</h3>
         <p className="muted">Sign out on every device, including this one.</p>
         <button
@@ -115,36 +45,26 @@ export function SecurityPanel({ user, onClose }: { user: User; onClose: () => vo
           Permanently deletes your account, your workspace, its records and its public pages.
           Members lose access. Export a backup first.
         </p>
-        {mode !== 'delete' && (
-          <button className="danger" onClick={() => setMode('delete')}>
+        {!deleting && (
+          <button className="danger" onClick={() => setDeleting(true)}>
             <Trash2 size={16} /> Delete account…
           </button>
         )}
-        {mode && (
+        {deleting && (
           <form
             className="form-grid"
             onSubmit={(e) => {
               e.preventDefault();
               act(async () => {
-                if (mode === 'disable') {
-                  await api('/security/totp/disable', 'POST', { password, code });
-                  setMode('');
-                  setPassword('');
-                  setCode('');
-                  await load();
-                } else {
-                  await api('/account/delete', 'POST', { password, code, confirm });
-                  location.assign('/');
-                }
+                await api('/account/delete', 'POST', { password, code, confirm });
+                location.assign('/');
               });
             }}
           >
-            {mode === 'delete' && (
-              <label>
-                Type {user.email} to confirm
-                <input value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
-              </label>
-            )}
+            <label>
+              Type {user.email} to confirm
+              <input value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+            </label>
             <label>
               Password
               <input
@@ -155,7 +75,7 @@ export function SecurityPanel({ user, onClose }: { user: User; onClose: () => vo
                 required
               />
             </label>
-            {status?.totp && (
+            {mfa && (
               <label>
                 Authenticator or recovery code
                 <input
@@ -167,11 +87,11 @@ export function SecurityPanel({ user, onClose }: { user: User; onClose: () => vo
               </label>
             )}
             <div className="actions">
-              <button type="button" onClick={() => setMode('')}>
+              <button type="button" onClick={() => setDeleting(false)}>
                 Cancel
               </button>
-              <button className={mode === 'delete' ? 'danger' : 'primary'} type="submit">
-                {mode === 'delete' ? 'Delete permanently' : 'Turn off two-factor'}
+              <button className="danger" type="submit">
+                Delete permanently
               </button>
             </div>
           </form>

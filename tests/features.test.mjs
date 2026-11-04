@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { localDynamoFixture } from './dynamo-support.mjs';
-import { totpCode, currentStep } from '../server/totp.mjs';
 
 let server, url, dir, dynamo;
 before(async () => {
@@ -94,50 +93,6 @@ async function account(name = 'Team ' + ++n) {
 }
 const create = (cookie, module, title, data = {}, status = 'Active') =>
   call('/records', { method: 'POST', cookie, data: { module, title, status, data } });
-
-test('authenticator 2FA protects sign-in, rejects replays and supports recovery codes', async () => {
-  const user = await account();
-  const setup = await call('/security/totp/setup', {
-    method: 'POST',
-    cookie: user.cookie,
-    data: {},
-  });
-  assert.match(setup.body.uri, /^otpauth:\/\/totp\//);
-  const bad = await call('/security/totp/enable', {
-    method: 'POST',
-    cookie: user.cookie,
-    data: { code: '000000' },
-  });
-  assert.equal(bad.status, 400);
-  const step = currentStep() - 1;
-  const enable = await call('/security/totp/enable', {
-    method: 'POST',
-    cookie: user.cookie,
-    data: { code: totpCode(setup.body.secret, step) },
-  });
-  assert.equal(enable.status, 200);
-  assert.equal(enable.body.recoveryCodes.length, 8);
-  const login = (code) =>
-    call('/auth', {
-      method: 'POST',
-      data: { email: user.email, password: 'correct horse battery', code },
-    });
-  const missing = await login();
-  assert.equal(missing.status, 401);
-  assert.equal(missing.body.twoFactorRequired, true);
-  assert.equal(
-    (await login(totpCode(setup.body.secret, step))).status,
-    401,
-    'used code is rejected',
-  );
-  const ok = await login(totpCode(setup.body.secret, currentStep()));
-  assert.equal(ok.status, 200);
-  const recovery = enable.body.recoveryCodes[0];
-  assert.equal((await login(recovery)).status, 200);
-  assert.equal((await login(recovery)).status, 401, 'recovery codes are single-use');
-  const security = await call('/security', { cookie: user.cookie });
-  assert.deepEqual(security.body, { totp: true, recoveryCodesLeft: 7 });
-});
 
 test('sign out everywhere revokes every session and account deletion removes data', async () => {
   const user = await account();
