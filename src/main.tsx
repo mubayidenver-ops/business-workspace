@@ -21,10 +21,13 @@ import { Welcome } from './Welcome';
 import { BusinessInsights } from './BusinessInsights';
 import { PasswordModal } from './PasswordModal';
 import { BillingPanel } from './BillingPanel';
+import { TeamPanel } from './TeamPanel';
+import { BookingSeries } from './BookingSeries';
+import { DraftPanel, aiModules } from './DraftPanel';
 import { CommandPalette } from './CommandPalette';
 import { downloadAppointment } from './calendar';
-import { TeamPanel, SecurityPanel, WorkspaceSwitcher, type Workspace } from './TeamSecurity';
-import { PublicPagesPanel, WorkspacePage, BookingManage, InvitePage } from './PublicPages';
+import { SecurityPanel } from './TeamSecurity';
+import { PublicPagesPanel, WorkspacePage, BookingManage } from './PublicPages';
 import { TimesheetModal, ProfitReport, WorkOrdersModal } from './ProjectTools';
 import { projectFinancials } from '../shared/projects.mjs';
 import './styles.css';
@@ -84,8 +87,9 @@ const groupIcons: Record<string, string> = {
 };
 const getTool = (id: string) => tools.find((t) => t.id === id)!;
 type State = {
+  features?: { ai: boolean };
+  workspace: { id: string; name: string; role: 'owner' | 'viewer' | 'editor' };
   user: User;
-  workspace: Workspace;
   records: Item[];
   checks: Check[];
   storage?: string;
@@ -262,7 +266,7 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     </main>
   );
 }
-function App({ pendingInvite }: { pendingInvite?: string | null }) {
+function App() {
   const [sharing, setSharing] = useState<Item | null>(null);
   const [toolModal, setToolModal] = useState<{
     kind: 'timesheet' | 'service';
@@ -290,6 +294,11 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
       null,
     ),
     [print, setPrint] = useState<Item[] | null>(null);
+  const [renewing, setRenewing] = useState<Item | null>(null);
+  const [renewDate, setRenewDate] = useState(today);
+  const [renewBusy, setRenewBusy] = useState(false);
+  const [renewError, setRenewError] = useState('');
+  const [draftRecord, setDraftRecord] = useState<Item | null>(null);
   const [quoteHistory, setQuoteHistory] = useState<{ current: Item; previous: Item[] } | null>(
     null,
   );
@@ -308,12 +317,6 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
     [refreshing, setRefreshing] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (state && pendingInvite) {
-      sessionStorage.removeItem('bw-invite');
-      location.assign('/#invite=' + pendingInvite);
-    }
-  }, [state, pendingInvite]);
-  useEffect(() => {
     if (!state || editing || sharing || archive || checkResult || (panel && panel !== 'commands'))
       return;
     function shortcut(event: KeyboardEvent) {
@@ -326,7 +329,13 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
     return () => window.removeEventListener('keydown', shortcut);
   }, [!!state, editing, sharing, archive, checkResult, panel]);
   const refresh = async () => {
-    const data = await api<State>('/state');
+    const data = await api<State>('/state').catch((error) => {
+      if (error.status !== 403 || !sessionStorage.getItem('bw-workspace')) throw error;
+      sessionStorage.removeItem('bw-workspace');
+      setEditing(null);
+      setNotice('Team access changed. Showing your own workspace.');
+      return api<State>('/state');
+    });
     setState(data);
     setLoadError('');
   };
@@ -456,6 +465,7 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
         {params.has('auth') ? <Auth onAuth={refresh} /> : <Welcome />}
       </>
     );
+  const isOwner = state.workspace.role === 'owner';
   const active = state.records.filter((r) => !r.archived);
   const due = active.filter(
     (r) =>
@@ -517,15 +527,11 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
               business<span className="brand-second">workspace</span>
             </span>
           </a>
-          <button className="workspace-switch" onClick={() => setPanel('settings')}>
-            <span className="avatar">{state.workspace.name.slice(0, 1).toUpperCase()}</span>
+          <button className="workspace-switch" onClick={() => setPanel('team')}>
+            <span className="avatar">{state.user.name.slice(0, 1).toUpperCase()}</span>
             <span>
               {state.workspace.name}
-              <small>
-                {state.workspace.id === state.user.id
-                  ? 'Your workspace'
-                  : `${state.workspace.role} · ${state.user.name}`}
-              </small>
+              <small>{isOwner ? 'My workspace' : state.workspace.role + ' access'}</small>
             </span>
             <Icons.ChevronsUpDown size={15} />
           </button>
@@ -961,6 +967,11 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
                     New {currentTool.unit}
                   </button>
                 </div>
+                {view === 'booking' && isOwner && (
+                  <button onClick={() => setPanel('booking-series')}>
+                    Reserve recurring slots
+                  </button>
+                )}
                 {currentTool.integration && (
                   <div className="integration-note">
                     <Icons.Info size={18} />
@@ -1104,10 +1115,10 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
                                 <td className="muted small">{date(r.updated)}</td>
                                 <td>
                                   <div className="row-actions">
-                                    {canShare(r.module) &&
+                                    {isOwner &&
+                                      canShare(r.module) &&
                                       !r.archived &&
-                                      (r.module !== 'booking' ||
-                                        (r.status === 'Active' && r.data.offerSlot)) && (
+                                      (r.module !== 'booking' || r.status === 'Active') && (
                                         <button
                                           className="icon-button"
                                           aria-label={'Share ' + r.title}
@@ -1181,7 +1192,33 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
                                         Transcript
                                       </button>
                                     )}
-                                    {r.module === 'proposals' && !r.archived && (
+                                    {isOwner &&
+                                      ['equipment', 'licences'].includes(r.module) &&
+                                      Number(r.data.repeatDays) > 0 &&
+                                      !r.archived &&
+                                      r.status !== 'Cancelled' && (
+                                        <button
+                                          onClick={() => {
+                                            setRenewing(r);
+                                            setRenewDate(today());
+                                            setRenewError('');
+                                          }}
+                                        >
+                                          Record completion
+                                        </button>
+                                      )}
+                                    {state.features?.ai &&
+                                      aiModules.includes(r.module) &&
+                                      !r.archived && (
+                                        <button
+                                          className="icon-button"
+                                          aria-label={'Draft with AI for ' + r.title}
+                                          onClick={() => setDraftRecord(r)}
+                                        >
+                                          <Icons.Sparkles size={16} />
+                                        </button>
+                                      )}
+                                    {isOwner && r.module === 'proposals' && !r.archived && (
                                       <button
                                         disabled={!!converting}
                                         onClick={async () => {
@@ -1210,13 +1247,14 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
                                     >
                                       <Icons.Pencil size={16} />
                                     </button>
-                                    {['uptime', 'links', 'changes', 'expiry'].includes(view) &&
+                                    {isOwner &&
+                                      ['uptime', 'links', 'changes', 'expiry'].includes(view) &&
                                       !r.archived && (
                                         <button disabled={!!run} onClick={() => void runCheck(r)}>
                                           {run === r.id ? 'Checking…' : 'Check now'}
                                         </button>
                                       )}
-                                    {view === 'feedback' && (
+                                    {isOwner && view === 'feedback' && (
                                       <button
                                         onClick={async () => {
                                           try {
@@ -1233,6 +1271,7 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
                                     )}
                                     <button
                                       className="icon-button"
+                                      disabled={!isOwner}
                                       aria-label={(r.archived ? 'Restore ' : 'Archive ') + r.title}
                                       onClick={() => {
                                         setArchive(r);
@@ -1362,6 +1401,7 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
         <RecordEditor
           tool={editing.tool}
           item={editing.item}
+          readOnly={state.workspace.role === 'viewer'}
           template={editing.template}
           onClose={() => setEditing(null)}
           onSave={saved}
@@ -1462,6 +1502,16 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
       {panel === 'commands' && (
         <CommandPalette tools={tools} open={navigate} close={() => setPanel('')} />
       )}
+      {panel === 'booking-series' && isOwner && (
+        <BookingSeries close={() => setPanel('')} saved={saved} />
+      )}
+      {panel === 'team' && (
+        <TeamPanel
+          workspaceId={state.workspace.id}
+          accountId={state.user.id}
+          onClose={() => setPanel('settings')}
+        />
+      )}
       {panel === 'settings' && (
         <Modal title="Workspace settings" onClose={() => setPanel('')}>
           <div className="modal-body">
@@ -1472,21 +1522,21 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
                 <p className="muted">{state.user.email}</p>
               </div>
             </div>
-            <WorkspaceSwitcher current={state.workspace} />
             <dl className="settings-list">
               <div>
-                <dt>Workspace</dt>
+                <dt>Workspace access</dt>
                 <dd>
-                  {state.workspace.name} · you are {state.workspace.role}{' '}
-                  <button className="link-button" onClick={() => setPanel('team')}>
-                    Manage team
-                  </button>
+                  {state.workspace.name} · {state.workspace.role}
                 </dd>
               </div>
               <div>
                 <dt>Public pages</dt>
                 <dd>
-                  <button className="link-button" onClick={() => setPanel('pages')}>
+                  <button
+                    className="link-button"
+                    disabled={!isOwner}
+                    onClick={() => setPanel('pages')}
+                  >
                     Help centre, status, feedback, testimonials, booking
                   </button>
                 </dd>
@@ -1506,9 +1556,13 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
               <div>
                 <dt>Billing</dt>
                 <dd>
-                  <button className="link-button" onClick={() => setPanel('billing')}>
-                    View plan & billing
-                  </button>
+                  {isOwner ? (
+                    <button className="link-button" onClick={() => setPanel('billing')}>
+                      View plan & billing
+                    </button>
+                  ) : (
+                    'Managed by the owner'
+                  )}
                 </dd>
               </div>
               <div>
@@ -1525,6 +1579,9 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
               check history.
             </p>
             <div className="actions">
+              <button onClick={() => setPanel('team')}>
+                <Icons.Users size={16} /> Teams and workspaces
+              </button>
               <button onClick={() => setPanel('password')}>
                 <Icons.LockKeyhole size={16} />
                 Change password
@@ -1545,6 +1602,7 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
                 onClick={async () => {
                   try {
                     await api('/logout', 'POST', {});
+                    sessionStorage.removeItem('bw-workspace');
                     setPanel('');
                     setState(null);
                   } catch (e) {
@@ -1642,7 +1700,8 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
             )}
             {checkResult.value.registrationExpires !== undefined && (
               <p>
-                Domain renewal (entered manually):{' '}
+                Domain registration (
+                {checkResult.value.registrationSource === 'rdap' ? 'registry' : 'manual date'}):{' '}
                 {checkResult.value.registrationExpires
                   ? date(checkResult.value.registrationExpires)
                   : 'Unknown'}
@@ -1687,13 +1746,6 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
         />
       )}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
-      {panel === 'team' && (
-        <TeamPanel
-          workspace={state.workspace}
-          user={state.user}
-          onClose={() => setPanel('settings')}
-        />
-      )}
       {panel === 'security' && (
         <SecurityPanel user={state.user} onClose={() => setPanel('settings')} />
       )}
@@ -1721,6 +1773,59 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
           }}
         />
       )}
+      {renewing && (
+        <Modal
+          title="Record completion"
+          onClose={() => {
+            if (!renewBusy) setRenewing(null);
+          }}
+        >
+          <form
+            className="modal-body"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setRenewBusy(true);
+              setRenewError('');
+              try {
+                await api('/records/' + renewing.id + '/renew', 'POST', {
+                  version: renewing.version,
+                  date: renewDate,
+                });
+                await saved();
+                setRenewing(null);
+              } catch (error) {
+                setRenewError((error as Error).message);
+              } finally {
+                setRenewBusy(false);
+              }
+            }}
+          >
+            <p>
+              {renewing.title}. The next due date is {String(renewing.data.repeatDays)} days after
+              this completion date.
+            </p>
+            <label>
+              Completion date
+              <input
+                type="date"
+                required
+                max={today()}
+                value={renewDate}
+                onChange={(event) => setRenewDate(event.target.value)}
+              />
+            </label>
+            {renewError && (
+              <p role="alert" className="error">
+                {renewError}
+              </p>
+            )}
+            <button className="primary" disabled={renewBusy}>
+              Save completion
+            </button>
+          </form>
+        </Modal>
+      )}
+      {draftRecord && <DraftPanel record={draftRecord} close={() => setDraftRecord(null)} />}
       {quoteHistory && (
         <Modal title="Quote revisions" onClose={() => setQuoteHistory(null)}>
           <div className="modal-body">
@@ -1751,13 +1856,13 @@ function App({ pendingInvite }: { pendingInvite?: string | null }) {
             <button onClick={() => setPrint(null)}>Close print preview</button>
             <button onClick={() => window.print()}>Print / save PDF</button>
           </div>
-          <h1>{state.user.name}</h1>
+          <h1>{state.workspace.name}</h1>
           {print.map((r) =>
             ['proposals', 'invoices'].includes(r.module) ? (
               <DocumentView
                 key={r.id}
                 title={r.title}
-                brand={state.user.name}
+                brand={state.workspace.name}
                 data={r.data}
                 module={r.module}
               />
@@ -1874,9 +1979,7 @@ function Entry() {
   if (token) return <PublicPage token={token} />;
   if (params.get('page')) return <WorkspacePage token={params.get('page')!} />;
   if (params.get('manage')) return <BookingManage token={params.get('manage')!} />;
-  if (params.get('invite')) return <InvitePage token={params.get('invite')!} />;
-  const pendingInvite = sessionStorage.getItem('bw-invite');
-  return <App pendingInvite={pendingInvite} />;
+  return <App />;
 }
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

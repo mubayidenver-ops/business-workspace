@@ -56,13 +56,14 @@ after(async () => {
   if (dir) await rm(dir, { recursive: true, force: true });
   if (dynamo) await dynamo.close();
 });
-async function req(path, method = 'GET', data, cookie, origin) {
+async function req(path, method = 'GET', data, cookie, origin, workspace) {
   const response = await fetch(url + '/api' + path, {
     method,
     headers: {
       ...(cookie ? { cookie } : {}),
       ...(method === 'GET' ? {} : { 'Content-Type': 'application/json' }),
       ...(origin ? { Origin: origin } : {}),
+      ...(workspace ? { 'X-Workspace': workspace } : {}),
     },
     body: data === undefined ? undefined : JSON.stringify(data),
   });
@@ -691,4 +692,143 @@ test('digital delivery only exposes a selected file through an expiring link', a
   assert.deepEqual(projection.data.data, { notes: 'Product', attachment });
   assert.equal((await req(route, 'DELETE', {}, cookieA)).status, 200);
   assert.equal((await guest(shared.data.token)).status, 410);
+});
+
+test('workspace roles isolate data, restrict editing, and enforce revocation', async () => {
+  const member = await req('/auth', 'POST', {
+    mode: 'login',
+    email: 'b@example.com',
+    password: 'unique-password-b',
+  });
+  assert.equal(member.status, 200);
+  const owner = (await req('/state', 'GET', undefined, cookieA)).data.user;
+  const memberRequest = (path, method = 'GET', payload) =>
+    req(path, method, payload, member.cookie, undefined, owner.id);
+  assert.equal((await memberRequest('/state')).status, 403);
+  const grant = (role) =>
+    req(
+      '/team',
+      'POST',
+      { email: member.data.email, memberId: member.data.id, role, confirmed: true },
+      cookieA,
+    );
+  assert.equal((await grant('viewer')).status, 200);
+  const read = await memberRequest('/state');
+  assert.equal(read.data.workspace.role, 'viewer');
+  assert.equal(read.data.user.id, member.data.id);
+  assert.equal(read.data.workspace.id, owner.id);
+  assert.ok(read.data.records.length > 0);
+  const payload = {
+    module: 'projects',
+    title: 'Team project',
+    status: 'Active',
+    data: { amount: '0' },
+  };
+  assert.equal((await memberRequest('/records', 'POST', payload)).status, 403);
+  assert.equal((await grant('editor')).status, 200);
+  const created = await memberRequest('/records', 'POST', payload);
+  assert.equal(created.status, 201);
+  const record = '/records/' + created.data.id;
+  assert.equal(
+    (await memberRequest(record, 'PATCH', { ...payload, version: 1, title: 'Edited project' }))
+      .status,
+    200,
+  );
+  assert.equal((await memberRequest(record, 'PATCH', { version: 2, archived: true })).status, 403);
+  assert.equal((await memberRequest('/billing')).status, 403);
+  assert.equal(
+    (await memberRequest(record + '/share', 'POST', { version: 2, confirmed: true })).status,
+    403,
+  );
+  assert.equal(
+    (await memberRequest(record + '/draft', 'POST', { version: 2, confirmed: true })).status,
+    403,
+  );
+  assert.equal((await req('/team', 'DELETE', { memberId: member.data.id }, cookieA)).status, 200);
+  assert.equal((await memberRequest('/state')).status, 403);
+  const team = await req('/team', 'GET', undefined, cookieA);
+  assert.equal(team.data.members.length, 0);
+  assert.deepEqual(
+    team.data.audit.map((event) => event.action),
+    ['revoked', 'editor', 'viewer'],
+  );
+});
+
+test('maintenance completion advances the next due date only once', async () => {
+  const date = new Date().toISOString().slice(0, 10);
+  const input = {
+    module: 'equipment',
+    title: 'Service pump',
+    status: 'Active',
+    data: { client: 'Warehouse', due: date, repeatDays: '30' },
+  };
+  const created = await req('/records', 'POST', input, cookieA);
+  assert.equal(created.status, 201);
+  const path = '/records/' + created.data.id + '/renew';
+  const results = await Promise.all(
+    [1, 1].map((version) => req(path, 'POST', { version, date }, cookieA)),
+  );
+  const complete = results.find((result) => result.status === 200);
+  assert.ok(complete);
+  assert.equal(results.filter((result) => result.status === 200).length, 1);
+  assert.equal(complete.data.data.lastCompleted, date);
+  assert.equal(
+    complete.data.data.due,
+    new Date(Date.parse(date) + 30 * 86400000).toISOString().slice(0, 10),
+  );
+  assert.equal((await req(path, 'POST', { version: 2, date }, cookieA)).status, 409);
+});
+
+test('recurring reservations are atomic and group links confirm one guest per slot', async () => {
+  const at = (days) => new Date(Date.now() + days * 86400000).toISOString();
+  const slot = (days) => ({
+    start: at(days),
+    end: new Date(Date.parse(at(days)) + 3600000).toISOString(),
+  });
+  const first = slot(8);
+  const second = slot(15);
+  const requestKey = '079c18c7-10f6-42d1-8ac1-3709ddaf20fd';
+  const series = { title: 'Weekly consult', requestKey, slots: [first, second] };
+  assert.equal((await req('/booking-series', 'POST', series, cookieA)).status, 201);
+  assert.equal((await req('/booking-series', 'POST', series, cookieA)).status, 201);
+  const conflicting = await req(
+    '/booking-series',
+    'POST',
+    {
+      title: 'Atomic failure',
+      requestKey: '86c5bdea-a5f4-4a11-87a3-46b0d44f4676',
+      slots: [slot(23), second],
+    },
+    cookieA,
+  );
+  assert.equal(conflicting.status, 409);
+  const state = (await req('/state', 'GET', undefined, cookieA)).data;
+  assert.ok(!state.records.some((record) => record.title === 'Atomic failure'));
+  const records = state.records
+    .filter((record) => record.title === series.title)
+    .sort((a, b) => a.data.start.localeCompare(b.data.start));
+  assert.equal(records.length, 2);
+  const path = '/records/' + records[0].id + '/share';
+  const shared = await req(
+    path,
+    'POST',
+    { version: 1, confirmed: true, collection: [records[1].id] },
+    cookieA,
+  );
+  assert.equal(shared.status, 201);
+  const token = shared.data.token;
+  const read = await guest(token);
+  assert.equal(read.data.slots.length, 2);
+  const book = (slotId) =>
+    guest(token, 'POST', { slotId, version: 1, name: 'Guest', email: 'guest@example.com' });
+  const attempts = await Promise.all([book(records[0].id), book(records[0].id)]);
+  assert.equal(attempts.filter((result) => result.status === 200).length, 1);
+  assert.deepEqual(
+    (await guest(token)).data.slots.map((slot) => slot.id),
+    [records[1].id],
+  );
+  assert.equal((await book(records[1].id)).status, 200);
+  assert.deepEqual((await guest(token)).data.slots, []);
+  assert.equal((await req(path, 'DELETE', {}, cookieA)).status, 200);
+  assert.equal((await guest(token)).status, 410);
 });

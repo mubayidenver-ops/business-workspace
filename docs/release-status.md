@@ -21,13 +21,12 @@ This is a runnable first development release, not a launched paid service. All 3
 - All 30 module record screens: create, edit, search, pagination, archive, restore and CSV export.
 - Invoice balance and project profit calculations; quotation amounts and printable records.
 - Appointment conflict prevention; due-date notifications displayed in-app.
-- Feedback votes: one per workspace member in the app, and one per browser on the public feedback board.
-- Team workspaces: invitation links (7 days, bound to the invited email), owner/admin/member roles, workspace switching, leaving and removing members (25 members per workspace). Members create and edit records; admins also archive, share, publish public pages and invite members; only the owner manages billing and admins.
-- Account security: authenticator-app (TOTP) two-factor sign-in with replay protection and 8 single-use recovery codes, sign out of every session, and password-confirmed account deletion that removes the owner's workspace and memberships.
+- Feedback votes: one per account in the app, and one per browser on the public feedback board.
+- Account security: authenticator-app (TOTP) two-factor sign-in with replay protection and 8 single-use recovery codes, sign out of every session, and password-confirmed account deletion that removes the owner's workspace and team memberships. Public pages and booking availability are managed by the workspace owner.
 - Public workspace pages (one link per type, replaceable): feedback board with voting and moderated submissions, testimonial wall with moderated consented submissions, searchable help centre, uptime status page, and a booking page.
 - Bookings: weekly availability windows in a chosen time zone (DST-aware) with slot length, buffer, minimum notice and horizon; guests receive a private link to reschedule or cancel.
 - Projects: per-project timesheets (billable/non-billable hours, billable rate) and a cross-project profit report with per-currency totals and CSV export.
-- Equipment: recurring service intervals, work orders, service logging that advances the next due date and closes the linked work order, and service history.
+- Equipment: work orders, service logging that advances the next due date and closes the linked work order, and service history.
 - Spreadsheet cleanup imports .xlsx workbooks (any worksheet) in the browser without uploading them.
 - CSV parsing with quoted cells and multiline fields, trim/deduplicate, inconsistent-column warnings and formula-safe export.
 - PDF merge and page extraction; PNG/JPG/WebP input with proportional PNG/JPG resize output.

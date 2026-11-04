@@ -60,10 +60,11 @@ export const tools = [
     fields: [
       f('url', 'Website URL', 'url', true),
       f('due', 'Domain renewal date', 'date'),
+      f('registrationDomain', 'Registered domain for RDAP lookup (optional)'),
       f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
     ],
     integration:
-      'Certificate expiry can be checked on demand. Domain renewal dates are entered manually.',
+      'Look up domain registration expiry through RDAP and check TLS separately. A manually entered renewal date takes precedence.',
   },
   {
     id: 'approvals',
@@ -404,6 +405,7 @@ export const tools = [
       f('amount', 'Renewal cost', 'number'),
       f('currency', 'Currency code'),
       f('due', 'Renews on', 'date'),
+      f('repeatDays', 'Renewal interval in days (optional)', 'number'),
       f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
       f('seats', 'Seats', 'number'),
       f('notes', 'Plan notes — do not enter licence secrets', 'textarea'),
@@ -419,8 +421,7 @@ export const tools = [
     fields: [
       f('client', 'Location or owner'),
       f('due', 'Next service', 'date'),
-      f('serviceIntervalDays', 'Repeat service every N days (0 = one-off)', 'number'),
-      f('lastService', 'Last serviced', 'date'),
+      f('repeatDays', 'Repeat after service (days, optional)', 'number'),
       f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
       f('notes', 'Service instructions and history', 'textarea'),
     ],

@@ -95,115 +95,6 @@ async function account(name = 'Team ' + ++n) {
 const create = (cookie, module, title, data = {}, status = 'Active') =>
   call('/records', { method: 'POST', cookie, data: { module, title, status, data } });
 
-test('owners invite members who share the workspace with role limits', async () => {
-  const owner = await account('Acme Studio');
-  const member = await account();
-  const outsider = await account();
-  const invite = await call('/team/invites', {
-    method: 'POST',
-    cookie: owner.cookie,
-    data: { email: member.email, role: 'member' },
-  });
-  assert.equal(invite.status, 201);
-  const preview = await call('/invite', { headers: { 'X-Workspace-Invite': invite.body.token } });
-  assert.equal(preview.body.workspaceName, 'Acme Studio');
-  const wrong = await call('/invite/accept', {
-    method: 'POST',
-    cookie: outsider.cookie,
-    data: {},
-    headers: { 'X-Workspace-Invite': invite.body.token },
-  });
-  assert.equal(wrong.status, 403);
-  const accepted = await call('/invite/accept', {
-    method: 'POST',
-    cookie: member.cookie,
-    data: {},
-    headers: { 'X-Workspace-Invite': invite.body.token },
-  });
-  assert.equal(accepted.status, 200);
-  const memberCookie = cookies(accepted.response, member.cookie);
-  const reused = await call('/invite', { headers: { 'X-Workspace-Invite': invite.body.token } });
-  assert.equal(reused.status, 410);
-
-  const shared = await create(owner.cookie, 'feedback', 'Dark mode');
-  const state = await call('/state', { cookie: memberCookie });
-  assert.equal(state.body.workspace.role, 'member');
-  assert.ok(state.body.records.some((r) => r.id === shared.body.id));
-  const added = await create(memberCookie, 'feedback', 'Member idea');
-  assert.equal(added.status, 201);
-  assert.ok(
-    (await call('/state', { cookie: owner.cookie })).body.records.some(
-      (r) => r.id === added.body.id,
-    ),
-  );
-  assert.equal(
-    (await call('/state', { cookie: member.cookie })).body.workspace.id,
-    member.id,
-    'without the workspace cookie the member sees their own workspace',
-  );
-
-  const archive = await call('/records/' + shared.body.id, {
-    method: 'PATCH',
-    cookie: memberCookie,
-    data: { version: shared.body.version, archived: true },
-  });
-  assert.equal(archive.status, 403);
-  assert.equal(
-    (
-      await call('/team/invites', {
-        method: 'POST',
-        cookie: memberCookie,
-        data: { email: 'x@example.com', role: 'member' },
-      })
-    ).status,
-    403,
-  );
-  assert.equal(
-    (await call('/billing/checkout', { method: 'POST', cookie: memberCookie, data: {} })).status,
-    403,
-  );
-
-  const promote = await call('/team/members/' + member.id, {
-    method: 'PATCH',
-    cookie: owner.cookie,
-    data: { role: 'admin' },
-  });
-  assert.equal(promote.status, 200);
-  const archived = await call('/records/' + shared.body.id, {
-    method: 'PATCH',
-    cookie: memberCookie,
-    data: { version: shared.body.version, archived: true },
-  });
-  assert.equal(archived.status, 200);
-  assert.equal(
-    (
-      await call('/team/invites', {
-        method: 'POST',
-        cookie: memberCookie,
-        data: { email: 'x@example.com', role: 'admin' },
-      })
-    ).status,
-    403,
-    'admins cannot invite admins',
-  );
-  const team = await call('/team', { cookie: owner.cookie });
-  assert.equal(team.body.members.length, 1);
-  assert.equal(team.body.members[0].role, 'admin');
-
-  const switched = await call('/workspaces/active', {
-    method: 'POST',
-    cookie: outsider.cookie,
-    data: { id: owner.id },
-  });
-  assert.equal(switched.status, 404);
-  const removed = await call('/team/members/' + member.id, {
-    method: 'DELETE',
-    cookie: owner.cookie,
-  });
-  assert.equal(removed.status, 200);
-  assert.equal((await call('/state', { cookie: memberCookie })).body.workspace.id, member.id);
-});
-
 test('authenticator 2FA protects sign-in, rejects replays and supports recovery codes', async () => {
   const user = await account();
   const setup = await call('/security/totp/setup', {
@@ -504,7 +395,7 @@ test('project timesheets and equipment work orders are validated and preserved',
 
   const asset = await create(owner.cookie, 'equipment', 'Generator', {
     due: '2026-01-01',
-    serviceIntervalDays: '30',
+    repeatDays: '30',
     workOrders: JSON.stringify([
       { id: 'wo-12345678', title: 'Replace filter', status: 'Open', due: '2026-01-01' },
     ]),
@@ -522,11 +413,10 @@ test('project timesheets and equipment work orders are validated and preserved',
   });
   assert.equal(serviced.status, 200);
   assert.equal(serviced.body.data.due, '2026-02-04');
-  assert.equal(serviced.body.data.lastService, '2026-01-05');
   assert.equal(JSON.parse(serviced.body.data.workOrders)[0].status, 'Done');
   assert.equal(JSON.parse(serviced.body.data.serviceLog)[0].notes, 'Filter swapped');
   const badInterval = await create(owner.cookie, 'equipment', 'Bad', {
-    serviceIntervalDays: '1.5',
+    repeatDays: '1.5',
   });
   assert.equal(badInterval.status, 400);
 });

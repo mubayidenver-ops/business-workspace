@@ -319,7 +319,7 @@ export function WorkOrdersModal({
   const log = parse<{ date: string; notes: string; cost: string; workOrder?: string }>(
     item.data.serviceLog,
   );
-  const interval = Number(item.data.serviceIntervalDays || 0);
+  const interval = Number(item.data.repeatDays || 0);
   async function run(work: () => Promise<unknown>) {
     setError('');
     try {
@@ -337,7 +337,6 @@ export function WorkOrdersModal({
         <p className="muted">
           {interval > 0 ? `Serviced every ${interval} days.` : 'One-off service.'} Next service:{' '}
           {item.data.due ? date(String(item.data.due)) : 'not set'}
-          {item.data.lastService ? ` · last serviced ${date(String(item.data.lastService))}` : ''}
         </p>
         <h3>Work orders</h3>
         <table className="mini-table">

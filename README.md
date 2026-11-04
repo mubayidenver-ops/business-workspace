@@ -6,7 +6,7 @@ A connected workbench for independent businesses, with 30 module workspaces for 
 
 **Development release.** Real local accounts and persistent records, working file utilities and bounded website checks. Itemised proposals/invoices, expiring client approval and brief links, dashboard insights and password changes are implemented. Billing and automatic media/AI providers are not connected. See [the professional workflow upgrade](docs/pro-upgrade.md). See [exact capability status](docs/release-status.md) before using the app.
 
-**Teams and public pages:** Invite members as admins or members, protect sign-in with an authenticator app, and publish a feedback board, testimonial wall, help centre, status page and weekly-availability booking page per workspace. See `docs/release-status.md`.
+**Security and public pages:** Protect sign-in with an authenticator app, and publish a feedback board, testimonial wall, help centre, status page and weekly-availability booking page per workspace. See `docs/release-status.md`.
 
 ## Run locally
 

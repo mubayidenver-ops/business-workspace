@@ -52,7 +52,9 @@ test('all 30 modules have unique IDs and validate their minimum record', () => {
                     ? 'test@example.com'
                     : f.key === 'currency'
                       ? 'USD'
-                      : 'Test',
+                      : f.key === 'registrationDomain'
+                        ? 'example.com'
+                        : 'Test',
       ]),
     );
     assert.equal(validateRecord(tool.id, { title: 'Test', status: 'Draft', data }).title, 'Test');

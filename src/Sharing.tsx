@@ -39,13 +39,17 @@ export function ShareModal({
   onClose: () => void;
 }) {
   const [collection, setCollection] = useState<string[]>([]);
-  const candidates = ['help', 'portfolio', 'catalogues'].includes(record.module)
+  const candidates = ['help', 'portfolio', 'catalogues', 'booking'].includes(record.module)
     ? related.filter(
         (entry) =>
           entry.id !== record.id &&
           entry.module === record.module &&
           !entry.archived &&
-          entry.status !== 'Cancelled',
+          entry.status !== 'Cancelled' &&
+          (record.module !== 'booking' ||
+            (entry.status === 'Active' &&
+              entry.data.offerSlot &&
+              Date.parse(String(entry.data.start)) > Date.now())),
       )
     : [];
   const [meta, setMeta] = useState<{ active: boolean; expires?: number } | null>(null),
@@ -205,7 +209,11 @@ export function ShareModal({
             </label>
             {candidates.length > 0 && (
               <fieldset>
-                <legend>Include more records (up to 12)</legend>
+                <legend>
+                  {record.module === 'booking'
+                    ? 'Offer additional times (up to 12)'
+                    : 'Include more records (up to 12)'}
+                </legend>
                 {candidates.map((entry) => (
                   <label className="inline-check" key={entry.id}>
                     <input
@@ -223,6 +231,9 @@ export function ShareModal({
                       }}
                     />
                     {entry.title}
+                    {record.module === 'booking'
+                      ? ' · ' + new Date(String(entry.data.start)).toLocaleString()
+                      : ''}
                   </label>
                 ))}
               </fieldset>
@@ -272,6 +283,7 @@ type PublicData = {
   data: Record<string, string | boolean>;
   document?: Parameters<typeof DocumentView>[0]['document'];
   entries?: PublicData[];
+  slots?: { id: string; version: number; start: string; end: string }[];
   check?: { created: string; ok: boolean; status?: number; ms?: number } | null;
 };
 export function PublicPage({ token }: { token: string }) {
@@ -286,6 +298,7 @@ export function PublicPage({ token }: { token: string }) {
     [action, setAction] = useState('approve'),
     [done, setDone] = useState(false);
   const [collectionQuery, setCollectionQuery] = useState('');
+  const [slotId, setSlotId] = useState('');
   const form = useRef<HTMLFormElement>(null);
   const questions =
     page?.module === 'onboarding'
@@ -332,6 +345,11 @@ export function PublicPage({ token }: { token: string }) {
   async function send(e: FormEvent) {
     e.preventDefault();
     if (busy || !page) return;
+    const slot = page.slots?.find((option) => option.id === slotId);
+    if (page.slots && !slot) {
+      setError('Choose an available appointment.');
+      return;
+    }
     setError('');
     const invalid = Array.from(form.current?.elements || []).find(
       (el) =>
@@ -345,7 +363,8 @@ export function PublicPage({ token }: { token: string }) {
     setBusy(true);
     try {
       await request('POST', {
-        version: page.version,
+        version: slot?.version ?? page.version,
+        ...(slot ? { slotId: slot.id } : {}),
         name,
         email,
         message,
@@ -401,7 +420,7 @@ export function PublicPage({ token }: { token: string }) {
               ? 'Your appointment is confirmed.'
               : 'Your response has been recorded for ' + page.brand + '.'}
           </p>
-          <p className="muted">This link has now closed to further responses.</p>
+          {!page.slots && <p className="muted">This link has now closed to further responses.</p>}
           <a className="button-link" href="/">
             Discover Business Workspace
             <ArrowUpRight size={16} />
@@ -462,7 +481,13 @@ export function PublicPage({ token }: { token: string }) {
                 )}
                 <span className="eyebrow">{page.brand}</span>
                 <h1>{page.title}</h1>
-                {page.module === 'booking' ? (
+                {page.module === 'booking' && page.slots ? (
+                  <p>
+                    {page.slots.length
+                      ? 'Times display in your local time zone.'
+                      : 'There are no available appointments on this link.'}
+                  </p>
+                ) : page.module === 'booking' ? (
                   <p>
                     {new Date(String(page.data.start)).toLocaleString()} to{' '}
                     {new Date(String(page.data.end)).toLocaleString()} (your local time)
@@ -556,15 +581,35 @@ export function PublicPage({ token }: { token: string }) {
               </button>
             )}
           </section>
-          {interactive && (
+          {interactive && (!page.slots || page.slots.length > 0) && (
             <aside className="public-response">
               <span className="eyebrow">LET’S MOVE THINGS FORWARD</span>
               <h2>
-                {page.module === 'onboarding'
-                  ? 'Your project starts here.'
-                  : 'Your feedback matters.'}
+                {page.module === 'booking'
+                  ? 'Book your appointment'
+                  : page.module === 'onboarding'
+                    ? 'Your project starts here.'
+                    : 'Your feedback matters.'}
               </h2>
               <form noValidate onSubmit={send} ref={form}>
+                {page.slots && (
+                  <label>
+                    Available appointment
+                    <select
+                      required
+                      value={slotId}
+                      onChange={(event) => setSlotId(event.target.value)}
+                    >
+                      <option value="">Choose a time</option>
+                      {page.slots.map((slot) => (
+                        <option key={slot.id} value={slot.id}>
+                          {new Date(slot.start).toLocaleString()} to{' '}
+                          {new Date(slot.end).toLocaleString()}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label>
                   Your name *
                   <input

@@ -105,12 +105,14 @@ export function RecordEditor({
   tool,
   item,
   template,
+  readOnly = false,
   onClose,
   onSave,
 }: {
   tool: Tool;
   item: Item | null;
   template?: Item;
+  readOnly?: boolean;
   onClose: () => void;
   onSave: () => Promise<void>;
 }) {
@@ -160,7 +162,7 @@ export function RecordEditor({
   const [busy, setBusy] = useState(false);
   const [discard, setDiscard] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
-  const dirty = JSON.stringify(form) !== original.current;
+  const dirty = !readOnly && JSON.stringify(form) !== original.current;
   useEffect(() => {
     const before = (e: BeforeUnloadEvent) => {
       if (dirty) {
@@ -178,7 +180,7 @@ export function RecordEditor({
   }
   async function save(e: FormEvent) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || readOnly) return;
     setError('');
     const invalid = Array.from(formRef.current?.elements || []).find(
       (el) =>
@@ -231,6 +233,29 @@ export function RecordEditor({
       setBusy(false);
     }
   }
+  if (readOnly)
+    return (
+      <Modal title={item?.title || 'Read-only workspace'} onClose={onClose}>
+        <div className="modal-body">
+          {item ? (
+            <dl>
+              {tool.fields.map((field) => (
+                <div key={field.key}>
+                  <dt>{field.label}</dt>
+                  <dd className="preserve-lines">{String(item.data[field.key] || '—')}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p>
+              Viewers can read existing records. Ask the workspace owner for editor access to create
+              records.
+            </p>
+          )}
+          {item?.data.attachment && <AttachmentDownload value={String(item.data.attachment)} />}
+        </div>
+      </Modal>
+    );
   return (
     <Modal title={item ? 'Edit ' + tool.unit : 'New ' + tool.unit} onClose={close}>
       <form ref={formRef} noValidate onSubmit={save} className="modal-body">

@@ -87,10 +87,9 @@ export function completeService(data, input) {
     ...(workOrder ? { workOrder } : {}),
   };
   const next = [entry, ...log].slice(0, 200);
-  const interval = Number(data.serviceIntervalDays || 0);
+  const interval = Number(data.repeatDays || 0);
   return {
     ...data,
-    lastService: date,
     due: interval > 0 ? addDays(date, interval) : data.due,
     serviceLog: JSON.stringify(next),
     workOrders: JSON.stringify(

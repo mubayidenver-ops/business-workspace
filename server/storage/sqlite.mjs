@@ -3,7 +3,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { makeRecord, changeRecord, replayRequest, storageError } from './rules.mjs';
+import {
+  makeRecord,
+  changeRecord,
+  replayRequest,
+  storageError,
+  sharedSlotRecord,
+} from './rules.mjs';
 export class SQLiteStore {
   constructor(directory) {
     mkdirSync(directory, { recursive: true });
@@ -20,11 +26,12 @@ CREATE TABLE IF NOT EXISTS payments(reference TEXT PRIMARY KEY,user_id TEXT NOT 
 CREATE TABLE IF NOT EXISTS invoice_reminders(user_id TEXT NOT NULL, key TEXT NOT NULL, claimed INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS quote_revisions(user_id TEXT NOT NULL, record_id TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(user_id,record_id,version));
 CREATE TABLE IF NOT EXISTS public_votes(record_id TEXT NOT NULL, voter TEXT NOT NULL, PRIMARY KEY(record_id,voter));
-CREATE TABLE IF NOT EXISTS invites(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, payload TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS members(workspace_id TEXT NOT NULL, user_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(workspace_id,user_id));
 CREATE TABLE IF NOT EXISTS settings(workspace_id TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(workspace_id,key));
 CREATE TABLE IF NOT EXISTS pages(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(workspace_id,kind));
 CREATE TABLE IF NOT EXISTS booking_tokens(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, record_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memberships(owner_id TEXT NOT NULL, member_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(owner_id,member_id));
+CREATE TABLE IF NOT EXISTS team_audit(owner_id TEXT NOT NULL, member_id TEXT NOT NULL, action TEXT NOT NULL, created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS memberships_member ON memberships(member_id);
 CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
     if (
       !this.db
@@ -68,98 +75,14 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       for (const table of ['checks', 'requests', 'invoice_reminders', 'quote_revisions'])
         this.db.prepare(`DELETE FROM ${table} WHERE user_id=?`).run(id);
       this.db.prepare('DELETE FROM shares WHERE user_id=?').run(id);
-      for (const table of ['invites', 'settings', 'pages', 'booking_tokens'])
+      for (const table of ['settings', 'pages', 'booking_tokens'])
         this.db.prepare(`DELETE FROM ${table} WHERE workspace_id=?`).run(id);
-      this.db.prepare('DELETE FROM members WHERE workspace_id=? OR user_id=?').run(id, id);
+      this.db.prepare('DELETE FROM memberships WHERE owner_id=? OR member_id=?').run(id, id);
+      this.db.prepare('DELETE FROM team_audit WHERE owner_id=?').run(id);
       this.db.prepare('DELETE FROM records WHERE user_id=?').run(id);
       this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);
       this.db.prepare('DELETE FROM users WHERE id=?').run(id);
     });
-  }
-  async createInvite(workspaceId, invite) {
-    this.transaction(() => {
-      this.db
-        .prepare("DELETE FROM invites WHERE workspace_id=? AND json_extract(payload,'$.email')=?")
-        .run(workspaceId, invite.email);
-      if (
-        this.db.prepare('SELECT COUNT(*) n FROM invites WHERE workspace_id=?').get(workspaceId).n >=
-        25
-      )
-        throw storageError(400, 'Revoke an old invitation before adding another.');
-      this.db
-        .prepare('INSERT INTO invites VALUES(?,?,?)')
-        .run(invite.hash, workspaceId, JSON.stringify(invite));
-    });
-  }
-  async invites(workspaceId) {
-    return this.db
-      .prepare('SELECT payload FROM invites WHERE workspace_id=?')
-      .all(workspaceId)
-      .map((r) => JSON.parse(r.payload))
-      .filter((i) => i.expires > Date.now());
-  }
-  async getInvite(hash) {
-    const row = this.db.prepare('SELECT payload FROM invites WHERE hash=?').get(hash);
-    const invite = row ? JSON.parse(row.payload) : null;
-    return invite && invite.expires > Date.now() ? invite : null;
-  }
-  async revokeInvite(workspaceId, hash) {
-    this.db.prepare('DELETE FROM invites WHERE workspace_id=? AND hash=?').run(workspaceId, hash);
-  }
-  async acceptInvite(hash, member) {
-    return this.transaction(() => {
-      const row = this.db.prepare('SELECT payload FROM invites WHERE hash=?').get(hash);
-      const invite = row ? JSON.parse(row.payload) : null;
-      if (!invite || invite.expires <= Date.now())
-        throw storageError(410, 'This invitation has expired or was revoked.');
-      if (
-        this.db
-          .prepare('SELECT COUNT(*) n FROM members WHERE workspace_id=?')
-          .get(invite.workspace_id).n >= 25
-      )
-        throw storageError(400, 'This workspace has reached its 25-member limit.');
-      const payload = {
-        ...member,
-        workspace_id: invite.workspace_id,
-        role: invite.role,
-        workspaceName: invite.workspaceName,
-      };
-      this.db
-        .prepare('INSERT OR REPLACE INTO members VALUES(?,?,?)')
-        .run(invite.workspace_id, member.user_id, JSON.stringify(payload));
-      this.db.prepare('DELETE FROM invites WHERE hash=?').run(hash);
-      return payload;
-    });
-  }
-  async members(workspaceId) {
-    return this.db
-      .prepare('SELECT payload FROM members WHERE workspace_id=?')
-      .all(workspaceId)
-      .map((r) => JSON.parse(r.payload));
-  }
-  async membership(workspaceId, userId) {
-    const row = this.db
-      .prepare('SELECT payload FROM members WHERE workspace_id=? AND user_id=?')
-      .get(workspaceId, userId);
-    return row ? JSON.parse(row.payload) : null;
-  }
-  async memberships(userId) {
-    return this.db
-      .prepare('SELECT payload FROM members WHERE user_id=?')
-      .all(userId)
-      .map((r) => JSON.parse(r.payload));
-  }
-  async setMemberRole(workspaceId, userId, role) {
-    const current = await this.membership(workspaceId, userId);
-    if (!current) throw storageError(404, 'This member is no longer in the workspace.');
-    this.db
-      .prepare('UPDATE members SET payload=? WHERE workspace_id=? AND user_id=?')
-      .run(JSON.stringify({ ...current, role }), workspaceId, userId);
-  }
-  async removeMember(workspaceId, userId) {
-    this.db
-      .prepare('DELETE FROM members WHERE workspace_id=? AND user_id=?')
-      .run(workspaceId, userId);
   }
   async getSetting(workspaceId, key) {
     const row = this.db
@@ -216,6 +139,57 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
   async deleteBookingToken(hash) {
     this.db.prepare('DELETE FROM booking_tokens WHERE hash=?').run(hash);
+  }
+  async membership(ownerId, memberId) {
+    const row = this.db
+      .prepare('SELECT payload FROM memberships WHERE owner_id=? AND member_id=?')
+      .get(ownerId, memberId);
+    return row ? JSON.parse(row.payload) : null;
+  }
+  async memberships(id, byOwner) {
+    const sql = byOwner
+      ? 'SELECT payload FROM memberships WHERE owner_id=?'
+      : 'SELECT payload FROM memberships WHERE member_id=?';
+    return this.db
+      .prepare(sql)
+      .all(id)
+      .map((row) => JSON.parse(row.payload));
+  }
+  async teamAudit(ownerId) {
+    return this.db
+      .prepare(
+        'SELECT member_id AS memberId, action, created FROM team_audit WHERE owner_id=? ORDER BY rowid DESC LIMIT 20',
+      )
+      .all(ownerId);
+  }
+  writeMembership(ownerId, memberId, action, operation) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      operation();
+      this.db
+        .prepare('INSERT INTO team_audit VALUES (?,?,?,?)')
+        .run(ownerId, memberId, action, new Date().toISOString());
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+  async setMembership(entry) {
+    this.writeMembership(entry.ownerId, entry.memberId, entry.role, () => {
+      this.db
+        .prepare(
+          'INSERT INTO memberships VALUES (?,?,?) ON CONFLICT(owner_id,member_id) DO UPDATE SET payload=excluded.payload',
+        )
+        .run(entry.ownerId, entry.memberId, JSON.stringify(entry));
+    });
+  }
+  async removeMembership(ownerId, memberId) {
+    this.writeMembership(ownerId, memberId, 'revoked', () => {
+      this.db
+        .prepare('DELETE FROM memberships WHERE owner_id=? AND member_id=?')
+        .run(ownerId, memberId);
+    });
   }
   async health() {
     this.db.prepare('SELECT 1').get();
@@ -294,9 +268,18 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
         .map((c) => ({ ...c, result: JSON.parse(c.result) })),
     };
   }
-  async createRecord(userId, module, record, key, hash) {
+  async createRecord(userId, module, record, key, hash, editorId) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      if (
+        editorId &&
+        JSON.parse(
+          this.db
+            .prepare('SELECT payload FROM memberships WHERE owner_id=? AND member_id=?')
+            .get(userId, editorId)?.payload || 'null',
+        )?.role !== 'editor'
+      )
+        throw storageError(403, 'Editor access is no longer available.');
       const records = this.records(userId);
       const previous = key
         ? this.db.prepare('SELECT * FROM requests WHERE user_id=? AND key=?').get(userId, key)
@@ -320,6 +303,41 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       throw e;
     }
   }
+  async createBookingSeries(userId, inputs, key, hash) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const records = this.records(userId);
+      const request = this.db
+        .prepare('SELECT * FROM requests WHERE user_id=? AND key=?')
+        .get(userId, key);
+      if (!replayRequest(request, hash, records)) {
+        const insert = this.db.prepare(
+          'INSERT INTO records(id,user_id,module,title,status,data,created,updated) VALUES(?,?,?,?,?,?,?,?)',
+        );
+        let first;
+        for (const input of inputs) {
+          const record = makeRecord(userId, 'booking', input, records);
+          records.push(record);
+          first ||= record;
+          insert.run(
+            record.id,
+            record.user_id,
+            record.module,
+            record.title,
+            record.status,
+            record.data,
+            record.created,
+            record.updated,
+          );
+        }
+        this.db.prepare('INSERT INTO requests VALUES(?,?,?,?)').run(userId, key, hash, first.id);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
   async quoteRevisions(userId, id) {
     return this.db
       .prepare(
@@ -328,9 +346,18 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       .all(userId, id)
       .map((row) => JSON.parse(row.payload));
   }
-  async updateRecord(userId, id, version, patch) {
+  async updateRecord(userId, id, version, patch, editorId) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      if (
+        editorId &&
+        JSON.parse(
+          this.db
+            .prepare('SELECT payload FROM memberships WHERE owner_id=? AND member_id=?')
+            .get(userId, editorId)?.payload || 'null',
+        )?.role !== 'editor'
+      )
+        throw storageError(403, 'Editor access is no longer available.');
       const records = this.records(userId);
       const r = changeRecord(records, id, version, patch);
       if (r.module === 'proposals') {
@@ -444,22 +471,26 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   async revokeShare(userId, id) {
     this.db.prepare('DELETE FROM shares WHERE user_id=? AND record_id=?').run(userId, id);
   }
-  async respondToShare(hash, version, patch) {
+  async respondToShare(hash, version, patch, slotId) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const row = this.db.prepare('SELECT payload FROM shares WHERE hash=?').get(hash);
       const share = row ? JSON.parse(row.payload) : null;
       if (!share || share.expires <= Date.now())
         throw storageError(410, 'This link is no longer available.');
-      if (share.recordVersion !== version)
-        throw storageError(409, 'This document changed. Request a new link.');
-      const r = changeRecord(this.records(share.user_id), share.record_id, version, patch);
+      const records = this.records(share.user_id);
+      const r = changeRecord(
+        records,
+        sharedSlotRecord(records, share, version, slotId),
+        version,
+        patch,
+      );
       this.db
         .prepare(
           'UPDATE records SET title=?,status=?,data=?,version=?,updated=? WHERE id=? AND user_id=?',
         )
         .run(r.title, r.status, r.data, r.version, r.updated, r.id, share.user_id);
-      this.db.prepare('DELETE FROM shares WHERE hash=?').run(hash);
+      if (!slotId) this.db.prepare('DELETE FROM shares WHERE hash=?').run(hash);
       this.db.exec('COMMIT');
       return r;
     } catch (e) {

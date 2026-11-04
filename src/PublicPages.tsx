@@ -3,7 +3,7 @@ import { ArrowUpRight, CheckCircle2, Copy, Globe, ThumbsUp, Trash2 } from 'lucid
 import { Modal, SearchBox } from './ui';
 import { api, date } from './lib';
 import { DesignerCredit } from './DesignerCredit';
-import type { Workspace } from './TeamSecurity';
+type Workspace = { id: string; name: string; role: string };
 
 const kinds = [
   [
@@ -69,7 +69,7 @@ export function PublicPagesPanel({
     [availability, setAvailability] = useState<Availability | null>(null),
     [editing, setEditing] = useState(false),
     [error, setError] = useState('');
-  const admin = workspace.role !== 'member';
+  const admin = workspace.role === 'owner';
   const load = () =>
     Promise.all([api<typeof pages>('/pages'), api<Availability | null>('/availability')]).then(
       ([p, a]) => {
@@ -764,68 +764,6 @@ export function BookingManage({ token }: { token: string }) {
           </p>
         </section>
       </div>
-    </Shell>
-  );
-}
-
-export function InvitePage({ token }: { token: string }) {
-  const [invite, setInvite] = useState<{
-      workspaceName: string;
-      role: string;
-      email: string;
-    } | null>(null),
-    [error, setError] = useState(''),
-    [signIn, setSignIn] = useState(false);
-  useEffect(() => {
-    publicCall<typeof invite>('/invite', 'X-Workspace-Invite', token).then(setInvite, (e) =>
-      setError(e.message),
-    );
-  }, [token]);
-  async function accept() {
-    setError('');
-    try {
-      await publicCall('/invite/accept', 'X-Workspace-Invite', token, {});
-      location.assign('/');
-    } catch (e) {
-      if ((e as { status?: number }).status === 401) {
-        sessionStorage.setItem('bw-invite', token);
-        setSignIn(true);
-      } else setError((e as Error).message);
-    }
-  }
-  if (!invite)
-    return (
-      <Shell>
-        <Unavailable error={error} />
-      </Shell>
-    );
-  return (
-    <Shell>
-      <section className="public-empty">
-        <h1>Join {invite.workspaceName}</h1>
-        <p className="muted">
-          You were invited as {invite.role === 'admin' ? 'an admin' : 'a member'} using{' '}
-          {invite.email}.
-        </p>
-        {signIn ? (
-          <p>
-            Sign in or create an account with {invite.email}, then you will return here.{' '}
-            <a className="button-link" href="/?auth=login">
-              Sign in
-            </a>{' '}
-            <a className="button-link" href="/?auth=register">
-              Create account
-            </a>
-          </p>
-        ) : (
-          <button className="primary" onClick={accept}>
-            Accept invitation
-          </button>
-        )}
-        <p className="error" role="alert">
-          {error}
-        </p>
-      </section>
     </Shell>
   );
 }

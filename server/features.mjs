@@ -3,14 +3,13 @@ import { validateRecord } from './validation.mjs';
 import { newSecret, otpauthURL, verifyTotp, newRecoveryCodes, useRecoveryCode } from './totp.mjs';
 import { validateAvailability, availableSlots } from '../shared/availability.mjs';
 
-export const roles = ['owner', 'admin', 'member'];
-const rank = { member: 1, admin: 2, owner: 3 };
+const rank = { viewer: 1, editor: 2, owner: 3 };
 export const pageKinds = ['feedback', 'testimonials', 'help', 'status', 'booking'];
 const publicFeedback = ['Active', 'In review', 'Completed'];
 const published = ['Active', 'Completed'];
 const cookie = (name, value, maxAge) =>
   `${name}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${process.env.COOKIE_SECURE === 'true' ? '; Secure' : ''}`;
-export const clearSession = [cookie('bw_session', '', 0), cookie('bw_workspace', '', 0)];
+export const clearSession = cookie('bw_session', '', 0);
 const data = (r) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data);
 const hex = (v, n = 64) => typeof v === 'string' && new RegExp(`^[a-f0-9]{${n}}$`).test(v);
 const email = (v) =>
@@ -25,11 +24,7 @@ export function verifyPassword(profile, password) {
 
 export function createFeatures({ store, billing, fail, body, json, rate, sessionHash }) {
   const requireRole = (ws, role) => {
-    if (rank[ws.role] < rank[role])
-      throw fail(
-        403,
-        `Only workspace ${role === 'owner' ? 'owners' : 'owners and admins'} can do this.`,
-      );
+    if (rank[ws.role] < rank[role]) throw fail(403, 'Only the workspace owner can do this.');
   };
   const clean = (fn, input) => {
     try {
@@ -53,23 +48,6 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     }
     await store.setSecurity(profile.email, security.version || 0, next);
     return true;
-  }
-
-  async function workspaceFor(req, user) {
-    const id = /\bbw_workspace=([a-f0-9-]{36})/.exec(req.headers.cookie || '')?.[1];
-    if (id && id !== user.id) {
-      const m = await store.membership(id, user.id);
-      if (m) return { id, name: m.workspaceName, role: m.role };
-    }
-    return { id: user.id, name: user.name, role: 'owner' };
-  }
-
-  async function workspaces(user) {
-    const memberships = await store.memberships(user.id);
-    return [
-      { id: user.id, name: user.name, role: 'owner' },
-      ...memberships.map((m) => ({ id: m.workspace_id, name: m.workspaceName, role: m.role })),
-    ];
   }
 
   async function bookingPage(workspaceId) {
@@ -305,153 +283,13 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       await manageBooking(req, res, req.headers['x-booking-token']);
       return true;
     }
-    if (url.pathname === '/api/invite' && req.method === 'GET') {
-      const token = req.headers['x-workspace-invite'];
-      const invite = hex(token) && (await store.getInvite(sessionHash(token)));
-      if (!invite) throw fail(410, 'This invitation has expired or was revoked.');
-      json(res, 200, {
-        workspaceName: invite.workspaceName,
-        role: invite.role,
-        email: invite.email,
-        expires: invite.expires,
-      });
-      return true;
-    }
     return false;
   }
 
   /** Signed-in routes for team, security, account and public page management. */
-  async function privateRoute(req, res, url, user, ws) {
+  async function accountRoute(req, res, url, user) {
     const path = url.pathname;
     const m = req.method;
-    if (path === '/api/workspaces' && m === 'GET') {
-      json(res, 200, await workspaces(user));
-      return true;
-    }
-    if (path === '/api/workspaces/active' && m === 'POST') {
-      const { id } = await body(req);
-      const list = await workspaces(user);
-      if (!list.some((w) => w.id === id))
-        throw fail(404, 'You are not a member of that workspace.');
-      json(res, 200, { id }, { 'Set-Cookie': cookie('bw_workspace', id, 604800) });
-      return true;
-    }
-    if (path === '/api/team' && m === 'GET') {
-      const owner = ws.id === user.id ? user : null;
-      json(res, 200, {
-        role: ws.role,
-        owner: owner
-          ? { id: owner.id, name: owner.name, email: owner.email }
-          : { id: ws.id, name: ws.name },
-        members: (await store.members(ws.id)).map(({ user_id, email, name, role, joined }) => ({
-          user_id,
-          email,
-          name,
-          role,
-          joined,
-        })),
-        invites:
-          rank[ws.role] >= rank.admin
-            ? (await store.invites(ws.id)).map(({ hash, email, role, expires }) => ({
-                hash,
-                email,
-                role,
-                expires,
-              }))
-            : [],
-      });
-      return true;
-    }
-    if (path === '/api/team/invites' && m === 'POST') {
-      requireRole(ws, 'admin');
-      rate('invite:' + ws.id, 30);
-      const input = await body(req);
-      const to = email(input.email);
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || to.length > 254)
-        throw fail(400, 'Enter a valid email address.');
-      if (!['admin', 'member'].includes(input.role)) throw fail(400, 'Choose admin or member.');
-      if (input.role === 'admin') requireRole(ws, 'owner');
-      const members = await store.members(ws.id);
-      if (to === user.email && ws.id === user.id)
-        throw fail(400, 'You already own this workspace.');
-      if (members.some((x) => x.email === to)) throw fail(400, 'This person is already a member.');
-      if (members.length >= 25) throw fail(400, 'This workspace has reached its 25-member limit.');
-      const token = randomBytes(32).toString('hex');
-      const expires = Date.now() + 7 * 86400000;
-      await store.createInvite(ws.id, {
-        hash: sessionHash(token),
-        email: to,
-        role: input.role,
-        workspace_id: ws.id,
-        workspaceName: ws.name,
-        invitedBy: user.email,
-        created: new Date().toISOString(),
-        expires,
-      });
-      json(res, 201, { token, expires });
-      return true;
-    }
-    const inviteMatch = /^\/api\/team\/invites\/([a-f0-9]{64})$/.exec(path);
-    if (inviteMatch && m === 'DELETE') {
-      requireRole(ws, 'admin');
-      await store.revokeInvite(ws.id, inviteMatch[1]);
-      json(res, 200, { revoked: true });
-      return true;
-    }
-    if (path === '/api/invite/accept' && m === 'POST') {
-      const token = req.headers['x-workspace-invite'];
-      const invite = hex(token) && (await store.getInvite(sessionHash(token)));
-      if (!invite) throw fail(410, 'This invitation has expired or was revoked.');
-      if (invite.email !== user.email)
-        throw fail(
-          403,
-          `This invitation was sent to ${invite.email}. Sign in with that email to accept it.`,
-        );
-      if (invite.workspace_id === user.id) throw fail(400, 'You already own this workspace.');
-      const member = await store.acceptInvite(sessionHash(token), {
-        user_id: user.id,
-        email: user.email,
-        name: user.name,
-        joined: new Date().toISOString(),
-      });
-      json(
-        res,
-        200,
-        { id: member.workspace_id, name: member.workspaceName, role: member.role },
-        {
-          'Set-Cookie': cookie('bw_workspace', member.workspace_id, 604800),
-        },
-      );
-      return true;
-    }
-    const memberMatch = /^\/api\/team\/members\/([a-f0-9-]{36})$/.exec(path);
-    if (memberMatch) {
-      const target = await store.membership(ws.id, memberMatch[1]);
-      if (!target) throw fail(404, 'This member is no longer in the workspace.');
-      if (m === 'PATCH') {
-        requireRole(ws, 'owner');
-        const { role } = await body(req);
-        if (!['admin', 'member'].includes(role)) throw fail(400, 'Choose admin or member.');
-        await store.setMemberRole(ws.id, target.user_id, role);
-        json(res, 200, { role });
-        return true;
-      }
-      if (m === 'DELETE') {
-        const leaving = target.user_id === user.id;
-        if (!leaving) {
-          requireRole(ws, 'admin');
-          if (target.role === 'admin') requireRole(ws, 'owner');
-        }
-        await store.removeMember(ws.id, target.user_id);
-        json(
-          res,
-          200,
-          { removed: true },
-          leaving ? { 'Set-Cookie': cookie('bw_workspace', '', 0) } : {},
-        );
-        return true;
-      }
-    }
     if (path === '/api/security' && m === 'GET') {
       const profile = await store.userByEmail(user.email);
       json(res, 200, {
@@ -522,13 +360,20 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       json(res, 200, { deleted: true }, { 'Set-Cookie': clearSession });
       return true;
     }
+    return false;
+  }
+
+  /** Owner-only public page and availability management for the selected workspace. */
+  async function workspaceRoute(req, res, url, user, ws) {
+    const path = url.pathname;
+    const m = req.method;
     if (path === '/api/availability') {
       if (m === 'GET') {
         json(res, 200, await store.getSetting(ws.id, 'availability'));
         return true;
       }
       if (m === 'PUT') {
-        requireRole(ws, 'admin');
+        requireRole(ws, 'owner');
         const value = clean(validateAvailability, await body(req));
         await store.putSetting(ws.id, 'availability', value);
         json(res, 200, value);
@@ -545,7 +390,7 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       return true;
     }
     if (path === '/api/pages' && m === 'POST') {
-      requireRole(ws, 'admin');
+      requireRole(ws, 'owner');
       await billing.requirePro(ws.id);
       const { kind } = await body(req);
       if (!pageKinds.includes(kind)) throw fail(400, 'Choose a supported public page.');
@@ -566,7 +411,7 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     }
     const pageMatch = /^\/api\/pages\/(\w+)$/.exec(path);
     if (pageMatch && m === 'DELETE') {
-      requireRole(ws, 'admin');
+      requireRole(ws, 'owner');
       await store.deletePage(ws.id, pageMatch[1]);
       json(res, 200, { removed: true });
       return true;
@@ -574,5 +419,5 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     return false;
   }
 
-  return { publicRoute, privateRoute, workspaceFor, secondFactor, requireRole, createManageToken };
+  return { publicRoute, accountRoute, workspaceRoute, secondFactor, createManageToken };
 }
