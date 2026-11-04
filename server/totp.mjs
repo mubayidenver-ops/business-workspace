@@ -57,9 +57,7 @@ export function verifyTotp(secret, code, lastStep = -1, now = Date.now()) {
 export const otpauthURL = (secret, email, issuer = 'Business Workspace') =>
   `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 const hashCode = (code) =>
-  createHash('sha256')
-    .update(code.replace(/[\s-]/g, '').toLowerCase())
-    .digest('hex');
+  createHash('sha256').update(code.replace(/[\s-]/g, '').toLowerCase()).digest('hex');
 export function newRecoveryCodes(count = 8) {
   const codes = Array.from({ length: count }, () => {
     const raw = randomBytes(5).toString('hex');

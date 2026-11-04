@@ -342,12 +342,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/logout' && req.method === 'POST') {
       const token = /\bbw_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
       await store.deleteSession(sessionHash(token));
-      json(
-        res,
-        200,
-        { ok: true },
-        { 'Set-Cookie': clearSession },
-      );
+      json(res, 200, { ok: true }, { 'Set-Cookie': clearSession });
       return;
     }
     if (url.pathname === '/api/state' && req.method === 'GET') {
@@ -412,9 +407,10 @@ const server = createServer(async (req, res) => {
       json(res, saved.replayed ? 200 : 201, toRecord(saved.record));
       return;
     }
-    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions|service))?$/.exec(
-      url.pathname,
-    );
+    const match =
+      /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions|service))?$/.exec(
+        url.pathname,
+      );
     if (match) {
       const r = await own(ws, match[1]);
       if (match[2] === 'revisions' && req.method === 'GET') {
@@ -456,9 +452,7 @@ const server = createServer(async (req, res) => {
               new Set(b.collection).size !== b.collection.length
             )
               throw fail(400, 'Choose up to 12 additional records of the same type.');
-            const entries = await Promise.all(
-              b.collection.map((id) => store.getRecord(ws.id, id)),
-            );
+            const entries = await Promise.all(b.collection.map((id) => store.getRecord(ws.id, id)));
             if (
               entries.some(
                 (entry) =>

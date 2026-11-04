@@ -56,7 +56,12 @@ after(async () => {
 });
 
 const cookies = (response, jar = '') => {
-  const map = new Map(jar.split('; ').filter(Boolean).map((c) => c.split('=')));
+  const map = new Map(
+    jar
+      .split('; ')
+      .filter(Boolean)
+      .map((c) => c.split('=')),
+  );
   for (const c of response.headers.getSetCookie()) {
     const [pair] = c.split(';');
     const [k, v] = pair.split('=');
@@ -126,7 +131,11 @@ test('owners invite members who share the workspace with role limits', async () 
   assert.ok(state.body.records.some((r) => r.id === shared.body.id));
   const added = await create(memberCookie, 'feedback', 'Member idea');
   assert.equal(added.status, 201);
-  assert.ok((await call('/state', { cookie: owner.cookie })).body.records.some((r) => r.id === added.body.id));
+  assert.ok(
+    (await call('/state', { cookie: owner.cookie })).body.records.some(
+      (r) => r.id === added.body.id,
+    ),
+  );
   assert.equal(
     (await call('/state', { cookie: member.cookie })).body.workspace.id,
     member.id,
@@ -140,10 +149,19 @@ test('owners invite members who share the workspace with role limits', async () 
   });
   assert.equal(archive.status, 403);
   assert.equal(
-    (await call('/team/invites', { method: 'POST', cookie: memberCookie, data: { email: 'x@example.com', role: 'member' } })).status,
+    (
+      await call('/team/invites', {
+        method: 'POST',
+        cookie: memberCookie,
+        data: { email: 'x@example.com', role: 'member' },
+      })
+    ).status,
     403,
   );
-  assert.equal((await call('/billing/checkout', { method: 'POST', cookie: memberCookie, data: {} })).status, 403);
+  assert.equal(
+    (await call('/billing/checkout', { method: 'POST', cookie: memberCookie, data: {} })).status,
+    403,
+  );
 
   const promote = await call('/team/members/' + member.id, {
     method: 'PATCH',
@@ -158,7 +176,13 @@ test('owners invite members who share the workspace with role limits', async () 
   });
   assert.equal(archived.status, 200);
   assert.equal(
-    (await call('/team/invites', { method: 'POST', cookie: memberCookie, data: { email: 'x@example.com', role: 'admin' } })).status,
+    (
+      await call('/team/invites', {
+        method: 'POST',
+        cookie: memberCookie,
+        data: { email: 'x@example.com', role: 'admin' },
+      })
+    ).status,
     403,
     'admins cannot invite admins',
   );
@@ -166,18 +190,33 @@ test('owners invite members who share the workspace with role limits', async () 
   assert.equal(team.body.members.length, 1);
   assert.equal(team.body.members[0].role, 'admin');
 
-  const switched = await call('/workspaces/active', { method: 'POST', cookie: outsider.cookie, data: { id: owner.id } });
+  const switched = await call('/workspaces/active', {
+    method: 'POST',
+    cookie: outsider.cookie,
+    data: { id: owner.id },
+  });
   assert.equal(switched.status, 404);
-  const removed = await call('/team/members/' + member.id, { method: 'DELETE', cookie: owner.cookie });
+  const removed = await call('/team/members/' + member.id, {
+    method: 'DELETE',
+    cookie: owner.cookie,
+  });
   assert.equal(removed.status, 200);
   assert.equal((await call('/state', { cookie: memberCookie })).body.workspace.id, member.id);
 });
 
 test('authenticator 2FA protects sign-in, rejects replays and supports recovery codes', async () => {
   const user = await account();
-  const setup = await call('/security/totp/setup', { method: 'POST', cookie: user.cookie, data: {} });
+  const setup = await call('/security/totp/setup', {
+    method: 'POST',
+    cookie: user.cookie,
+    data: {},
+  });
   assert.match(setup.body.uri, /^otpauth:\/\/totp\//);
-  const bad = await call('/security/totp/enable', { method: 'POST', cookie: user.cookie, data: { code: '000000' } });
+  const bad = await call('/security/totp/enable', {
+    method: 'POST',
+    cookie: user.cookie,
+    data: { code: '000000' },
+  });
   assert.equal(bad.status, 400);
   const step = currentStep() - 1;
   const enable = await call('/security/totp/enable', {
@@ -188,11 +227,18 @@ test('authenticator 2FA protects sign-in, rejects replays and supports recovery 
   assert.equal(enable.status, 200);
   assert.equal(enable.body.recoveryCodes.length, 8);
   const login = (code) =>
-    call('/auth', { method: 'POST', data: { email: user.email, password: 'correct horse battery', code } });
+    call('/auth', {
+      method: 'POST',
+      data: { email: user.email, password: 'correct horse battery', code },
+    });
   const missing = await login();
   assert.equal(missing.status, 401);
   assert.equal(missing.body.twoFactorRequired, true);
-  assert.equal((await login(totpCode(setup.body.secret, step))).status, 401, 'used code is rejected');
+  assert.equal(
+    (await login(totpCode(setup.body.secret, step))).status,
+    401,
+    'used code is rejected',
+  );
   const ok = await login(totpCode(setup.body.secret, currentStep()));
   assert.equal(ok.status, 200);
   const recovery = enable.body.recoveryCodes[0];
@@ -204,16 +250,30 @@ test('authenticator 2FA protects sign-in, rejects replays and supports recovery 
 
 test('sign out everywhere revokes every session and account deletion removes data', async () => {
   const user = await account();
-  const second = await call('/auth', { method: 'POST', data: { email: user.email, password: 'correct horse battery' } });
+  const second = await call('/auth', {
+    method: 'POST',
+    data: { email: user.email, password: 'correct horse battery' },
+  });
   const other = cookies(second.response);
   await create(user.cookie, 'help', 'Getting started', { notes: 'Welcome' });
-  assert.equal((await call('/security/sessions/revoke', { method: 'POST', cookie: user.cookie, data: {} })).status, 200);
+  assert.equal(
+    (await call('/security/sessions/revoke', { method: 'POST', cookie: user.cookie, data: {} }))
+      .status,
+    200,
+  );
   assert.equal((await call('/state', { cookie: other })).status, 401);
   assert.equal((await call('/state', { cookie: user.cookie })).status, 401);
 
-  const again = await call('/auth', { method: 'POST', data: { email: user.email, password: 'correct horse battery' } });
+  const again = await call('/auth', {
+    method: 'POST',
+    data: { email: user.email, password: 'correct horse battery' },
+  });
   const cookie = cookies(again.response);
-  const wrong = await call('/account/delete', { method: 'POST', cookie, data: { confirm: user.email, password: 'nope nope nope' } });
+  const wrong = await call('/account/delete', {
+    method: 'POST',
+    cookie,
+    data: { confirm: user.email, password: 'nope nope nope' },
+  });
   assert.equal(wrong.status, 400);
   const deleted = await call('/account/delete', {
     method: 'POST',
@@ -222,14 +282,20 @@ test('sign out everywhere revokes every session and account deletion removes dat
   });
   assert.equal(deleted.status, 200);
   assert.equal((await call('/state', { cookie })).status, 401);
-  const login = await call('/auth', { method: 'POST', data: { email: user.email, password: 'correct horse battery' } });
+  const login = await call('/auth', {
+    method: 'POST',
+    data: { email: user.email, password: 'correct horse battery' },
+  });
   assert.equal(login.status, 401);
   const reregister = await call('/auth', {
     method: 'POST',
     data: { mode: 'register', email: user.email, password: 'correct horse battery', name: 'New' },
   });
   assert.equal(reregister.status, 200);
-  assert.equal((await call('/state', { cookie: cookies(reregister.response) })).body.records.length, 0);
+  assert.equal(
+    (await call('/state', { cookie: cookies(reregister.response) })).body.records.length,
+    0,
+  );
 });
 
 test('public feedback board, testimonial page, help centre and status page', async () => {
@@ -244,10 +310,17 @@ test('public feedback board, testimonial page, help centre and status page', asy
   const board = await page('feedback');
   let got = await call('/page', { headers: board });
   assert.equal(got.body.brand, 'Northwind');
-  assert.deepEqual(got.body.requests.map((r) => r.title), ['Export to PDF']);
+  assert.deepEqual(
+    got.body.requests.map((r) => r.title),
+    ['Export to PDF'],
+  );
   const voter = 'a'.repeat(32);
   const vote = (v = voter) =>
-    call('/page', { method: 'POST', headers: board, data: { action: 'vote', id: visible.body.id, voter: v } });
+    call('/page', {
+      method: 'POST',
+      headers: board,
+      data: { action: 'vote', id: visible.body.id, voter: v },
+    });
   assert.equal((await vote()).body.counted, true);
   assert.equal((await vote()).body.counted, false);
   await vote('b'.repeat(32));
@@ -263,25 +336,57 @@ test('public feedback board, testimonial page, help centre and status page', asy
   const draft = state.body.records.find((r) => r.title === 'Calendar sync');
   assert.equal(draft.status, 'Draft');
   assert.equal(draft.data.client, 'Pat');
-  assert.equal((await call('/page', { headers: board })).body.requests.length, 1, 'submissions wait for moderation');
+  assert.equal(
+    (await call('/page', { headers: board })).body.requests.length,
+    1,
+    'submissions wait for moderation',
+  );
 
   const testimonials = await page('testimonials');
-  await create(owner.cookie, 'testimonials', 'Great', { client: 'Lee', notes: 'Loved it', consent: true });
-  await create(owner.cookie, 'testimonials', 'No consent', { client: 'Sam', notes: 'Shh', consent: false });
-  assert.deepEqual((await call('/page', { headers: testimonials })).body.testimonials, [{ client: 'Lee', notes: 'Loved it' }]);
+  await create(owner.cookie, 'testimonials', 'Great', {
+    client: 'Lee',
+    notes: 'Loved it',
+    consent: true,
+  });
+  await create(owner.cookie, 'testimonials', 'No consent', {
+    client: 'Sam',
+    notes: 'Shh',
+    consent: false,
+  });
+  assert.deepEqual((await call('/page', { headers: testimonials })).body.testimonials, [
+    { client: 'Lee', notes: 'Loved it' },
+  ]);
   assert.equal(
-    (await call('/page', { method: 'POST', headers: testimonials, data: { action: 'submit', name: 'Kim', notes: 'Superb', consent: true } })).status,
+    (
+      await call('/page', {
+        method: 'POST',
+        headers: testimonials,
+        data: { action: 'submit', name: 'Kim', notes: 'Superb', consent: true },
+      })
+    ).status,
     201,
   );
   assert.equal(
-    (await call('/page', { method: 'POST', headers: testimonials, data: { action: 'vote', id: visible.body.id, voter } })).status,
+    (
+      await call('/page', {
+        method: 'POST',
+        headers: testimonials,
+        data: { action: 'vote', id: visible.body.id, voter },
+      })
+    ).status,
     400,
   );
 
   const help = await page('help');
-  await create(owner.cookie, 'help', 'Resetting passwords', { category: 'Account', notes: 'Use settings.' });
+  await create(owner.cookie, 'help', 'Resetting passwords', {
+    category: 'Account',
+    notes: 'Use settings.',
+  });
   await create(owner.cookie, 'help', 'Internal', { notes: 'secret' }, 'Draft');
-  assert.deepEqual((await call('/page', { headers: help })).body.articles.map((a) => a.title), ['Resetting passwords']);
+  assert.deepEqual(
+    (await call('/page', { headers: help })).body.articles.map((a) => a.title),
+    ['Resetting passwords'],
+  );
 
   const status = await page('status');
   await create(owner.cookie, 'uptime', 'Website', { url: 'https://example.invalid' });
@@ -291,27 +396,49 @@ test('public feedback board, testimonial page, help centre and status page', asy
 
   assert.equal((await call('/pages/help', { method: 'DELETE', cookie: owner.cookie })).status, 200);
   assert.equal((await call('/page', { headers: help })).status, 410);
-  assert.equal((await call('/page', { headers: { 'X-Workspace-Page': 'f'.repeat(64) } })).status, 410);
+  assert.equal(
+    (await call('/page', { headers: { 'X-Workspace-Page': 'f'.repeat(64) } })).status,
+    410,
+  );
 });
 
 test('weekly availability booking page with guest reschedule and cancel links', async () => {
   const owner = await account('Clinic');
-  assert.equal((await call('/pages', { method: 'POST', cookie: owner.cookie, data: { kind: 'booking' } })).status, 400);
+  assert.equal(
+    (await call('/pages', { method: 'POST', cookie: owner.cookie, data: { kind: 'booking' } }))
+      .status,
+    400,
+  );
   const windows = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, start: '09:00', end: '12:00' }));
   const availability = await call('/availability', {
     method: 'PUT',
     cookie: owner.cookie,
-    data: { title: 'Consultation', timezone: 'UTC', windows, slotMinutes: 60, noticeHours: 1, horizonDays: 14 },
+    data: {
+      title: 'Consultation',
+      timezone: 'UTC',
+      windows,
+      slotMinutes: 60,
+      noticeHours: 1,
+      horizonDays: 14,
+    },
   });
   assert.equal(availability.status, 200);
-  const created = await call('/pages', { method: 'POST', cookie: owner.cookie, data: { kind: 'booking' } });
+  const created = await call('/pages', {
+    method: 'POST',
+    cookie: owner.cookie,
+    data: { kind: 'booking' },
+  });
   const headers = { 'X-Workspace-Page': created.body.token };
   const page = await call('/page', { headers });
   assert.equal(page.body.title, 'Consultation');
   assert.ok(page.body.slots.length >= 30);
   const [first, second] = page.body.slots;
   const book = (start) =>
-    call('/page', { method: 'POST', headers, data: { action: 'book', start, name: 'Ana', email: 'ana@example.com' } });
+    call('/page', {
+      method: 'POST',
+      headers,
+      data: { action: 'book', start, name: 'Ana', email: 'ana@example.com' },
+    });
   const booked = await book(first);
   assert.equal(booked.status, 201);
   assert.equal((await book(first)).status, 409, 'a slot cannot be double-booked');
@@ -322,18 +449,29 @@ test('weekly availability booking page with guest reschedule and cancel links', 
   const view = await call('/booking-manage', { headers: manage });
   assert.equal(view.body.start, first);
   assert.ok(view.body.slots.includes(second));
-  const moved = await call('/booking-manage', { method: 'POST', headers: manage, data: { action: 'reschedule', start: second } });
+  const moved = await call('/booking-manage', {
+    method: 'POST',
+    headers: manage,
+    data: { action: 'reschedule', start: second },
+  });
   assert.equal(moved.status, 200);
   let state = await call('/state', { cookie: owner.cookie });
   const record = state.body.records.find((r) => r.module === 'booking');
   assert.equal(record.data.start, second);
   assert.equal(record.data.email, 'ana@example.com');
-  const cancelled = await call('/booking-manage', { method: 'POST', headers: manage, data: { action: 'cancel' } });
+  const cancelled = await call('/booking-manage', {
+    method: 'POST',
+    headers: manage,
+    data: { action: 'cancel' },
+  });
   assert.equal(cancelled.status, 200);
   state = await call('/state', { cookie: owner.cookie });
   assert.equal(state.body.records.find((r) => r.module === 'booking').status, 'Cancelled');
   assert.equal((await call('/booking-manage', { headers: manage })).status, 410);
-  assert.ok((await call('/page', { headers })).body.slots.includes(second), 'cancelled slot reopens');
+  assert.ok(
+    (await call('/page', { headers })).body.slots.includes(second),
+    'cancelled slot reopens',
+  );
 });
 
 test('project timesheets and equipment work orders are validated and preserved', async () => {
@@ -347,12 +485,19 @@ test('project timesheets and equipment work orders are validated and preserved',
   });
   assert.equal(project.status, 201);
   assert.equal(JSON.parse(project.body.data.timeEntries)[0].hours, 3);
-  const invalid = await create(owner.cookie, 'projects', 'Bad', { timeEntries: JSON.stringify([{ date: 'x', hours: 3 }]) });
+  const invalid = await create(owner.cookie, 'projects', 'Bad', {
+    timeEntries: JSON.stringify([{ date: 'x', hours: 3 }]),
+  });
   assert.equal(invalid.status, 400);
   const edited = await call('/records/' + project.body.id, {
     method: 'PATCH',
     cookie: owner.cookie,
-    data: { version: project.body.version, title: 'Website v2', status: 'Active', data: { amount: '1200' } },
+    data: {
+      version: project.body.version,
+      title: 'Website v2',
+      status: 'Active',
+      data: { amount: '1200' },
+    },
   });
   assert.equal(edited.status, 200);
   assert.ok(edited.body.data.timeEntries, 'editing other fields keeps the timesheet');
@@ -360,19 +505,28 @@ test('project timesheets and equipment work orders are validated and preserved',
   const asset = await create(owner.cookie, 'equipment', 'Generator', {
     due: '2026-01-01',
     serviceIntervalDays: '30',
-    workOrders: JSON.stringify([{ id: 'wo-12345678', title: 'Replace filter', status: 'Open', due: '2026-01-01' }]),
+    workOrders: JSON.stringify([
+      { id: 'wo-12345678', title: 'Replace filter', status: 'Open', due: '2026-01-01' },
+    ]),
   });
   assert.equal(asset.status, 201);
   const serviced = await call(`/records/${asset.body.id}/service`, {
     method: 'POST',
     cookie: owner.cookie,
-    data: { version: asset.body.version, date: '2026-01-05', notes: 'Filter swapped', workOrderId: 'wo-12345678' },
+    data: {
+      version: asset.body.version,
+      date: '2026-01-05',
+      notes: 'Filter swapped',
+      workOrderId: 'wo-12345678',
+    },
   });
   assert.equal(serviced.status, 200);
   assert.equal(serviced.body.data.due, '2026-02-04');
   assert.equal(serviced.body.data.lastService, '2026-01-05');
   assert.equal(JSON.parse(serviced.body.data.workOrders)[0].status, 'Done');
   assert.equal(JSON.parse(serviced.body.data.serviceLog)[0].notes, 'Filter swapped');
-  const badInterval = await create(owner.cookie, 'equipment', 'Bad', { serviceIntervalDays: '1.5' });
+  const badInterval = await create(owner.cookie, 'equipment', 'Bad', {
+    serviceIntervalDays: '1.5',
+  });
   assert.equal(badInterval.status, 400);
 });

@@ -60,10 +60,14 @@ test('xlsx import reads shared strings, inline strings, dates, gaps and multiple
       '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" s="1"><v>45658</v></c><c r="D2"><v>3.5</v></c></row>' +
       '<row r="4"><c r="A4" t="inlineStr"><is><t>Bo &lt;3</t></is></c><c r="B4" t="b"><v>1</v></c></row>' +
       '<row r="5"><c r="A5" t="s"><v>3</v></c></row></sheetData></worksheet>',
-    'xl/worksheets/sheet2.xml': '<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>',
+    'xl/worksheets/sheet2.xml':
+      '<worksheet><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>',
   });
   const sheets = await readXlsx(book);
-  assert.deepEqual(sheets.map((s) => s.name), ['Clients', 'Two & more']);
+  assert.deepEqual(
+    sheets.map((s) => s.name),
+    ['Clients', 'Two & more'],
+  );
   assert.deepEqual(sheets[0].rows, [
     ['Name', 'Joined', '', ''],
     ['Ana Lopez', '2025-01-01', '', '3.5'],
@@ -87,12 +91,25 @@ test('weekly availability honours time zones, DST gaps, notice and existing book
   });
   const now = Date.parse('2026-03-06T12:00:00Z');
   const slots = availableSlots(a, [], now);
-  assert.deepEqual(slots, ['2026-03-09T13:00:00.000Z', '2026-03-09T14:00:00.000Z'], 'EDT after DST');
-  const busy = [{ module: 'booking', status: 'Active', data: JSON.stringify({ start: slots[0], end: slots[1] }) }];
+  assert.deepEqual(
+    slots,
+    ['2026-03-09T13:00:00.000Z', '2026-03-09T14:00:00.000Z'],
+    'EDT after DST',
+  );
+  const busy = [
+    {
+      module: 'booking',
+      status: 'Active',
+      data: JSON.stringify({ start: slots[0], end: slots[1] }),
+    },
+  ];
   assert.deepEqual(availableSlots(a, busy, now), [slots[1]]);
   assert.equal(zonedToUtc(2026, 3, 8, 150, 'America/New_York'), null, '02:30 does not exist');
   assert.throws(() => validateAvailability({ ...a, timezone: 'Mars/Base' }), /time zone/);
-  assert.throws(() => validateAvailability({ ...a, windows: [{ day: 1, start: '10:00', end: '09:00' }] }), /before its end/);
+  assert.throws(
+    () => validateAvailability({ ...a, windows: [{ day: 1, start: '10:00', end: '09:00' }] }),
+    /before its end/,
+  );
 });
 
 test('project profit uses timesheets and totals per currency', () => {
@@ -118,16 +135,40 @@ test('project profit uses timesheets and totals per currency', () => {
     margin: 75.71,
   });
   const report = profitReport([
-    { id: '1', module: 'projects', title: 'A', status: 'Active', data: { ...data, currency: 'USD' } },
-    { id: '2', module: 'projects', title: 'B', status: 'Active', data: { amount: '100', currency: 'EUR' } },
-    { id: '3', module: 'projects', title: 'C', status: 'Active', data: { amount: '10', cost: '20', currency: 'USD' } },
+    {
+      id: '1',
+      module: 'projects',
+      title: 'A',
+      status: 'Active',
+      data: { ...data, currency: 'USD' },
+    },
+    {
+      id: '2',
+      module: 'projects',
+      title: 'B',
+      status: 'Active',
+      data: { amount: '100', currency: 'EUR' },
+    },
+    {
+      id: '3',
+      module: 'projects',
+      title: 'C',
+      status: 'Active',
+      data: { amount: '10', cost: '20', currency: 'USD' },
+    },
     { id: '4', module: 'notes', title: 'x', status: 'Active', data: {} },
   ]);
-  assert.deepEqual(report.rows.map((r) => r.id), ['1', '2', '3']);
-  assert.deepEqual(report.totals.map((t) => [t.currency, t.projects, t.profit]), [
-    ['EUR', 1, 100],
-    ['USD', 2, 520],
-  ]);
+  assert.deepEqual(
+    report.rows.map((r) => r.id),
+    ['1', '2', '3'],
+  );
+  assert.deepEqual(
+    report.totals.map((t) => [t.currency, t.projects, t.profit]),
+    [
+      ['EUR', 1, 100],
+      ['USD', 2, 520],
+    ],
+  );
 });
 
 test('recurring equipment service advances the due date and closes the work order', () => {
@@ -139,13 +180,30 @@ test('recurring equipment service advances the due date and closes the work orde
       { id: 'wo-bbbbbbbb', title: 'Belt', status: 'In progress', due: '2027-01-01' },
     ]),
   };
-  assert.deepEqual(openWorkOrdersDue(data, '2026-01-02').map((o) => o.id), ['wo-aaaaaaaa']);
-  const next = completeService(data, { date: '2026-01-10', workOrderId: 'wo-aaaaaaaa', cost: '25' });
+  assert.deepEqual(
+    openWorkOrdersDue(data, '2026-01-02').map((o) => o.id),
+    ['wo-aaaaaaaa'],
+  );
+  const next = completeService(data, {
+    date: '2026-01-10',
+    workOrderId: 'wo-aaaaaaaa',
+    cost: '25',
+  });
   assert.equal(next.due, '2026-04-10');
-  assert.deepEqual(JSON.parse(next.workOrders).map((o) => o.status), ['Done', 'In progress']);
+  assert.deepEqual(
+    JSON.parse(next.workOrders).map((o) => o.status),
+    ['Done', 'In progress'],
+  );
   assert.equal(JSON.parse(next.serviceLog)[0].cost, '25');
-  assert.equal(completeService({ due: '2026-05-05' }, { date: '2026-01-10' }).due, '2026-05-05', 'one-off keeps due');
-  assert.throws(() => completeService(data, { date: '2026-01-10', workOrderId: 'wo-missing1' }), /no longer/);
+  assert.equal(
+    completeService({ due: '2026-05-05' }, { date: '2026-01-10' }).due,
+    '2026-05-05',
+    'one-off keeps due',
+  );
+  assert.throws(
+    () => completeService(data, { date: '2026-01-10', workOrderId: 'wo-missing1' }),
+    /no longer/,
+  );
 });
 
 test('TOTP matches RFC 6238 vectors and allows one step of drift', () => {

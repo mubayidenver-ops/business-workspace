@@ -45,7 +45,9 @@ export async function unzip(bytes) {
 const decode = (s) =>
   s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, e) => {
     if (e[0] === '#')
-      return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : +e.slice(1));
+      return String.fromCodePoint(
+        e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : +e.slice(1),
+      );
     return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[e.toLowerCase()];
   });
 const attr = (tag, name) => {
@@ -90,7 +92,10 @@ export async function readXlsx(input, { maxRows = 20000, maxColumns = 200 } = {}
   if (!workbook) throw new Error('This file is not a valid .xlsx workbook.');
   const rels = (await zip.text('xl/_rels/workbook.xml.rels')) || '';
   const targets = new Map(
-    [...rels.matchAll(/<Relationship\s[^>]*>/g)].map((m) => [attr(m[0], 'Id'), attr(m[0], 'Target')]),
+    [...rels.matchAll(/<Relationship\s[^>]*>/g)].map((m) => [
+      attr(m[0], 'Id'),
+      attr(m[0], 'Target'),
+    ]),
   );
   const shared = [
     ...((await zip.text('xl/sharedStrings.xml')) || '').matchAll(/<si>([\s\S]*?)<\/si>/g),

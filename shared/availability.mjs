@@ -18,7 +18,8 @@ export function validateAvailability(input) {
   if (!input || typeof input !== 'object') throw new Error('Availability is invalid.');
   const title = String(input.title || '').trim();
   const description = String(input.description || '').trim();
-  if (!title || title.length > 120) throw new Error('Enter a booking page title of 1–120 characters.');
+  if (!title || title.length > 120)
+    throw new Error('Enter a booking page title of 1–120 characters.');
   if (description.length > 1000) throw new Error('Keep the description under 1,000 characters.');
   if (!validTimeZone(input.timezone)) throw new Error('Choose a valid time zone.');
   if (!Array.isArray(input.windows) || !input.windows.length || input.windows.length > 28)
@@ -93,7 +94,12 @@ export function bookingBusy(records, excludeId) {
     .filter((b) => Number.isFinite(b.start) && Number.isFinite(b.end));
 }
 /** Open slot start times (ISO strings) generated from weekly windows, excluding busy times and the notice period. */
-export function availableSlots(availability, records, now = Date.now(), { excludeId, limit = 400 } = {}) {
+export function availableSlots(
+  availability,
+  records,
+  now = Date.now(),
+  { excludeId, limit = 400 } = {},
+) {
   const a = availability;
   const busy = bookingBusy(records, excludeId);
   const earliest = now + a.noticeHours * 3600000;
@@ -105,7 +111,11 @@ export function availableSlots(availability, records, now = Date.now(), { exclud
     const p = zoneParts(now + dayOffset * 86400000, a.timezone);
     const day = weekdays[p.weekday];
     for (const w of a.windows.filter((w) => w.day === day)) {
-      for (let m = minutes(w.start); m + a.slotMinutes <= minutes(w.end); m += a.slotMinutes + a.bufferMinutes) {
+      for (
+        let m = minutes(w.start);
+        m + a.slotMinutes <= minutes(w.end);
+        m += a.slotMinutes + a.bufferMinutes
+      ) {
         const start = zonedToUtc(+p.year, +p.month, +p.day, m, a.timezone);
         if (start === null || seen.has(start)) continue;
         seen.add(start);

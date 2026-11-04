@@ -333,7 +333,10 @@ export class DynamoStore {
     return this.mutate(workspaceId, async ({ records }) => {
       const record = records.find((r) => r.id === id && (!module || r.module === module));
       if (!record)
-        throw storageError(404, module ? 'This request is no longer on the board.' : 'This record is not available.');
+        throw storageError(
+          404,
+          module ? 'This request is no longer on the board.' : 'This record is not available.',
+        );
       if (await this.get(workspace(workspaceId), sk)) return { result: false };
       return {
         items: [
@@ -362,7 +365,8 @@ export class DynamoStore {
         }),
       );
     } catch (e) {
-      if (collision(e)) throw storageError(409, 'Your security settings changed. Reload and try again.');
+      if (collision(e))
+        throw storageError(409, 'Your security settings changed. Reload and try again.');
       throw e;
     }
   }
@@ -392,11 +396,13 @@ export class DynamoStore {
   async deleteItems(items) {
     for (let i = 0; i < items.length; i += 25)
       await Promise.all(
-        items.slice(i, i + 25).map((item) =>
-          this.doc.send(
-            new DeleteCommand({ TableName: this.table, Key: { pk: item.pk, sk: item.sk } }),
+        items
+          .slice(i, i + 25)
+          .map((item) =>
+            this.doc.send(
+              new DeleteCommand({ TableName: this.table, Key: { pk: item.pk, sk: item.sk } }),
+            ),
           ),
-        ),
       );
   }
   async deleteAccount(user) {
@@ -407,10 +413,12 @@ export class DynamoStore {
     for (const item of items) {
       if (item.sk.startsWith('INVITE#')) links.push({ pk: item.sk, sk: 'LINK' });
       if (item.sk.startsWith('PAGE#')) links.push({ pk: `PAGE#${item.hash}`, sk: 'LINK' });
-      if (item.sk.startsWith('BOOKINGTOKEN#')) links.push({ pk: `BOOKING#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('BOOKINGTOKEN#'))
+        links.push({ pk: `BOOKING#${item.hash}`, sk: 'LINK' });
       if (item.sk.startsWith('MEMBER#'))
         links.push({ pk: `USER#${item.user_id}`, sk: `MEMBERSHIP#${user.id}` });
-      if (item.sk.startsWith('SHARE#') && item.hash) links.push({ pk: `SHARE#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('SHARE#') && item.hash)
+        links.push({ pk: `SHARE#${item.hash}`, sk: 'LINK' });
       if (item.sk.startsWith('RECORD#')) {
         links.push({ pk: 'MONITORS', sk: `${user.id}#${item.id}` });
         links.push({ pk: 'INVOICE_REMINDERS', sk: `${user.id}#${item.id}` });
@@ -421,7 +429,10 @@ export class DynamoStore {
       links.push({ pk: workspace(m.workspace_id), sk: `MEMBER#${user.id}` });
     }
     await this.deleteItems([...links, ...items.filter((i) => i.sk !== 'META')]);
-    await this.deleteItems([{ pk, sk: 'META' }, { pk: `ACCOUNT#${user.email}`, sk: 'PROFILE' }]);
+    await this.deleteItems([
+      { pk, sk: 'META' },
+      { pk: `ACCOUNT#${user.email}`, sk: 'PROFILE' },
+    ]);
   }
   async createInvite(workspaceId, invite) {
     const existing = (await this.query(workspace(workspaceId), 'INVITE#')).filter(
@@ -436,8 +447,18 @@ export class DynamoStore {
     await this.doc.send(
       new TransactWriteCommand({
         TransactItems: [
-          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `INVITE#${invite.hash}`, ...item } } },
-          { Put: { TableName: this.table, Item: { pk: `INVITE#${invite.hash}`, sk: 'LINK', ...item } } },
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: workspace(workspaceId), sk: `INVITE#${invite.hash}`, ...item },
+            },
+          },
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: `INVITE#${invite.hash}`, sk: 'LINK', ...item },
+            },
+          },
         ],
       }),
     );
@@ -464,7 +485,12 @@ export class DynamoStore {
     if (!invite) throw storageError(410, 'This invitation has expired or was revoked.');
     if ((await this.query(workspace(invite.workspace_id), 'MEMBER#')).length >= 25)
       throw storageError(400, 'This workspace has reached its 25-member limit.');
-    const payload = { ...member, workspace_id: invite.workspace_id, role: invite.role, workspaceName: invite.workspaceName };
+    const payload = {
+      ...member,
+      workspace_id: invite.workspace_id,
+      role: invite.role,
+      workspaceName: invite.workspaceName,
+    };
     try {
       await this.doc.send(
         new TransactWriteCommand({
@@ -476,9 +502,32 @@ export class DynamoStore {
                 ConditionExpression: 'attribute_exists(pk)',
               },
             },
-            { Delete: { TableName: this.table, Key: { pk: workspace(invite.workspace_id), sk: `INVITE#${hash}` } } },
-            { Put: { TableName: this.table, Item: { pk: workspace(invite.workspace_id), sk: `MEMBER#${member.user_id}`, ...payload } } },
-            { Put: { TableName: this.table, Item: { pk: `USER#${member.user_id}`, sk: `MEMBERSHIP#${invite.workspace_id}`, ...payload } } },
+            {
+              Delete: {
+                TableName: this.table,
+                Key: { pk: workspace(invite.workspace_id), sk: `INVITE#${hash}` },
+              },
+            },
+            {
+              Put: {
+                TableName: this.table,
+                Item: {
+                  pk: workspace(invite.workspace_id),
+                  sk: `MEMBER#${member.user_id}`,
+                  ...payload,
+                },
+              },
+            },
+            {
+              Put: {
+                TableName: this.table,
+                Item: {
+                  pk: `USER#${member.user_id}`,
+                  sk: `MEMBERSHIP#${invite.workspace_id}`,
+                  ...payload,
+                },
+              },
+            },
           ],
         }),
       );
@@ -504,8 +553,18 @@ export class DynamoStore {
     await this.doc.send(
       new TransactWriteCommand({
         TransactItems: [
-          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `MEMBER#${userId}`, ...payload } } },
-          { Put: { TableName: this.table, Item: { pk: `USER#${userId}`, sk: `MEMBERSHIP#${workspaceId}`, ...payload } } },
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: workspace(workspaceId), sk: `MEMBER#${userId}`, ...payload },
+            },
+          },
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: `USER#${userId}`, sk: `MEMBERSHIP#${workspaceId}`, ...payload },
+            },
+          },
         ],
       }),
     );
@@ -536,9 +595,25 @@ export class DynamoStore {
     await this.doc.send(
       new TransactWriteCommand({
         TransactItems: [
-          ...(previous ? [{ Delete: { TableName: this.table, Key: { pk: `PAGE#${previous.hash}`, sk: 'LINK' } } }] : []),
-          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `PAGE#${page.kind}`, ...item } } },
-          { Put: { TableName: this.table, Item: { pk: `PAGE#${page.hash}`, sk: 'LINK', ...item } } },
+          ...(previous
+            ? [
+                {
+                  Delete: {
+                    TableName: this.table,
+                    Key: { pk: `PAGE#${previous.hash}`, sk: 'LINK' },
+                  },
+                },
+              ]
+            : []),
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: workspace(workspaceId), sk: `PAGE#${page.kind}`, ...item },
+            },
+          },
+          {
+            Put: { TableName: this.table, Item: { pk: `PAGE#${page.hash}`, sk: 'LINK', ...item } },
+          },
         ],
       }),
     );
@@ -558,7 +633,12 @@ export class DynamoStore {
     await this.doc.send(
       new TransactWriteCommand({
         TransactItems: [
-          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `BOOKINGTOKEN#${recordId}`, ...item } } },
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: workspace(workspaceId), sk: `BOOKINGTOKEN#${recordId}`, ...item },
+            },
+          },
           { Put: { TableName: this.table, Item: { pk: `BOOKING#${hash}`, sk: 'LINK', ...item } } },
         ],
       }),

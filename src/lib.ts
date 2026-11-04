@@ -9,6 +9,7 @@ export async function api<T = unknown>(path: string, method = 'GET', value?: unk
   if (!response.ok)
     throw Object.assign(new Error(data.error || 'The request could not be completed.'), {
       status: response.status,
+      twoFactorRequired: data.twoFactorRequired === true,
     });
   return data;
 }

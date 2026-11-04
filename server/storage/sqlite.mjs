@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS settings(workspace_id TEXT NOT NULL, key TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS pages(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(workspace_id,kind));
 CREATE TABLE IF NOT EXISTS booking_tokens(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, record_id TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
-    if (!this.db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'security'))
+    if (
+      !this.db
+        .prepare('PRAGMA table_info(users)')
+        .all()
+        .some((c) => c.name === 'security')
+    )
       this.db.exec('ALTER TABLE users ADD COLUMN security TEXT');
   }
   transaction(work) {
@@ -56,7 +61,9 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
     this.transaction(() => {
       const id = user.id;
       const recordIds = 'SELECT id FROM records WHERE user_id=?';
-      this.db.prepare(`DELETE FROM votes WHERE record_id IN (${recordIds}) OR user_id=?`).run(id, id);
+      this.db
+        .prepare(`DELETE FROM votes WHERE record_id IN (${recordIds}) OR user_id=?`)
+        .run(id, id);
       this.db.prepare(`DELETE FROM public_votes WHERE record_id IN (${recordIds})`).run(id);
       for (const table of ['checks', 'requests', 'invoice_reminders', 'quote_revisions'])
         this.db.prepare(`DELETE FROM ${table} WHERE user_id=?`).run(id);
@@ -74,7 +81,10 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       this.db
         .prepare("DELETE FROM invites WHERE workspace_id=? AND json_extract(payload,'$.email')=?")
         .run(workspaceId, invite.email);
-      if (this.db.prepare('SELECT COUNT(*) n FROM invites WHERE workspace_id=?').get(workspaceId).n >= 25)
+      if (
+        this.db.prepare('SELECT COUNT(*) n FROM invites WHERE workspace_id=?').get(workspaceId).n >=
+        25
+      )
         throw storageError(400, 'Revoke an old invitation before adding another.');
       this.db
         .prepare('INSERT INTO invites VALUES(?,?,?)')
@@ -102,9 +112,18 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       const invite = row ? JSON.parse(row.payload) : null;
       if (!invite || invite.expires <= Date.now())
         throw storageError(410, 'This invitation has expired or was revoked.');
-      if (this.db.prepare('SELECT COUNT(*) n FROM members WHERE workspace_id=?').get(invite.workspace_id).n >= 25)
+      if (
+        this.db
+          .prepare('SELECT COUNT(*) n FROM members WHERE workspace_id=?')
+          .get(invite.workspace_id).n >= 25
+      )
         throw storageError(400, 'This workspace has reached its 25-member limit.');
-      const payload = { ...member, workspace_id: invite.workspace_id, role: invite.role, workspaceName: invite.workspaceName };
+      const payload = {
+        ...member,
+        workspace_id: invite.workspace_id,
+        role: invite.role,
+        workspaceName: invite.workspaceName,
+      };
       this.db
         .prepare('INSERT OR REPLACE INTO members VALUES(?,?,?)')
         .run(invite.workspace_id, member.user_id, JSON.stringify(payload));
@@ -138,7 +157,9 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       .run(JSON.stringify({ ...current, role }), workspaceId, userId);
   }
   async removeMember(workspaceId, userId) {
-    this.db.prepare('DELETE FROM members WHERE workspace_id=? AND user_id=?').run(workspaceId, userId);
+    this.db
+      .prepare('DELETE FROM members WHERE workspace_id=? AND user_id=?')
+      .run(workspaceId, userId);
   }
   async getSetting(workspaceId, key) {
     const row = this.db
@@ -159,7 +180,9 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
   }
   async createPage(workspaceId, page) {
     this.transaction(() => {
-      this.db.prepare('DELETE FROM pages WHERE workspace_id=? AND kind=?').run(workspaceId, page.kind);
+      this.db
+        .prepare('DELETE FROM pages WHERE workspace_id=? AND kind=?')
+        .run(workspaceId, page.kind);
       this.db
         .prepare('INSERT INTO pages VALUES(?,?,?,?)')
         .run(page.hash, workspaceId, page.kind, JSON.stringify(page));
@@ -183,7 +206,9 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
     );
   }
   async createBookingToken(workspaceId, recordId, hash) {
-    this.db.prepare('DELETE FROM booking_tokens WHERE workspace_id=? AND record_id=?').run(workspaceId, recordId);
+    this.db
+      .prepare('DELETE FROM booking_tokens WHERE workspace_id=? AND record_id=?')
+      .run(workspaceId, recordId);
     this.db.prepare('INSERT INTO booking_tokens VALUES(?,?,?)').run(hash, workspaceId, recordId);
   }
   async bookingToken(hash) {

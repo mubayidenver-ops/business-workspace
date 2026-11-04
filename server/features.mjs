@@ -26,7 +26,10 @@ export function verifyPassword(profile, password) {
 export function createFeatures({ store, billing, fail, body, json, rate, sessionHash }) {
   const requireRole = (ws, role) => {
     if (rank[ws.role] < rank[role])
-      throw fail(403, `Only workspace ${role === 'owner' ? 'owners' : 'owners and admins'} can do this.`);
+      throw fail(
+        403,
+        `Only workspace ${role === 'owner' ? 'owners' : 'owners and admins'} can do this.`,
+      );
   };
   const clean = (fn, input) => {
     try {
@@ -90,16 +93,33 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       if (page.kind === 'feedback')
         result.requests = live
           .filter((r) => r.module === 'feedback' && publicFeedback.includes(r.status))
-          .map((r) => ({ id: r.id, title: r.title, status: r.status, votes: r.votes || 0, notes: data(r).notes || '' }))
+          .map((r) => ({
+            id: r.id,
+            title: r.title,
+            status: r.status,
+            votes: r.votes || 0,
+            notes: data(r).notes || '',
+          }))
           .sort((a, b) => b.votes - a.votes);
       if (page.kind === 'testimonials')
         result.testimonials = live
-          .filter((r) => r.module === 'testimonials' && published.includes(r.status) && data(r).consent === true)
+          .filter(
+            (r) =>
+              r.module === 'testimonials' &&
+              published.includes(r.status) &&
+              data(r).consent === true,
+          )
           .map((r) => ({ client: data(r).client, notes: data(r).notes }));
       if (page.kind === 'help')
         result.articles = live
           .filter((r) => r.module === 'help' && published.includes(r.status))
-          .map((r) => ({ id: r.id, title: r.title, category: data(r).category || 'General', notes: data(r).notes, updated: r.updated }));
+          .map((r) => ({
+            id: r.id,
+            title: r.title,
+            category: data(r).category || 'General',
+            notes: data(r).notes,
+            updated: r.updated,
+          }));
       if (page.kind === 'status') {
         const day = Date.now() - 86400000;
         result.monitors = live
@@ -145,16 +165,26 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     if (input.action === 'vote' && page.kind === 'feedback') {
       if (!hex(input.voter, 32)) throw fail(400, 'Reload the page and try again.');
       const record = await store.getRecord(ws, String(input.id || ''));
-      if (!record || record.archived || record.module !== 'feedback' || !publicFeedback.includes(record.status))
+      if (
+        !record ||
+        record.archived ||
+        record.module !== 'feedback' ||
+        !publicFeedback.includes(record.status)
+      )
         throw fail(404, 'This request is no longer on the board.');
-      const counted = await store.publicVote(ws, record.id, sessionHash(record.id + ':' + input.voter));
+      const counted = await store.publicVote(
+        ws,
+        record.id,
+        sessionHash(record.id + ':' + input.voter),
+      );
       json(res, 200, { counted });
       return;
     }
     if (input.action === 'submit' && ['feedback', 'testimonials'].includes(page.kind)) {
       if (!name || name.length > 80) throw fail(400, 'Enter your name.');
       const notes = String(input.notes || '').trim();
-      if (!notes || notes.length > 5000) throw fail(400, 'Write a message of up to 5,000 characters.');
+      if (!notes || notes.length > 5000)
+        throw fail(400, 'Write a message of up to 5,000 characters.');
       const record =
         page.kind === 'feedback'
           ? clean(validateRecord.bind(null, 'feedback'), {
@@ -224,7 +254,8 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
         status: record.status,
         changeable,
         timezone: a?.timezone,
-        slots: a && changeable ? availableSlots(a, records, Date.now(), { excludeId: record.id }) : [],
+        slots:
+          a && changeable ? availableSlots(a, records, Date.now(), { excludeId: record.id }) : [],
       });
       return;
     }
@@ -234,7 +265,10 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     if (input.action === 'cancel') {
       await store.updateRecord(link.workspace_id, record.id, record.version, {
         status: 'Cancelled',
-        data: JSON.stringify({ ...d, notes: [d.notes, 'Cancelled by guest.'].filter(Boolean).join('\n') }),
+        data: JSON.stringify({
+          ...d,
+          notes: [d.notes, 'Cancelled by guest.'].filter(Boolean).join('\n'),
+        }),
       });
       await store.deleteBookingToken(hash);
       json(res, 200, { cancelled: true });
@@ -297,7 +331,8 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     if (path === '/api/workspaces/active' && m === 'POST') {
       const { id } = await body(req);
       const list = await workspaces(user);
-      if (!list.some((w) => w.id === id)) throw fail(404, 'You are not a member of that workspace.');
+      if (!list.some((w) => w.id === id))
+        throw fail(404, 'You are not a member of that workspace.');
       json(res, 200, { id }, { 'Set-Cookie': cookie('bw_workspace', id, 604800) });
       return true;
     }
@@ -305,7 +340,9 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       const owner = ws.id === user.id ? user : null;
       json(res, 200, {
         role: ws.role,
-        owner: owner ? { id: owner.id, name: owner.name, email: owner.email } : { id: ws.id, name: ws.name },
+        owner: owner
+          ? { id: owner.id, name: owner.name, email: owner.email }
+          : { id: ws.id, name: ws.name },
         members: (await store.members(ws.id)).map(({ user_id, email, name, role, joined }) => ({
           user_id,
           email,
@@ -315,7 +352,12 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
         })),
         invites:
           rank[ws.role] >= rank.admin
-            ? (await store.invites(ws.id)).map(({ hash, email, role, expires }) => ({ hash, email, role, expires }))
+            ? (await store.invites(ws.id)).map(({ hash, email, role, expires }) => ({
+                hash,
+                email,
+                role,
+                expires,
+              }))
             : [],
       });
       return true;
@@ -325,11 +367,13 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       rate('invite:' + ws.id, 30);
       const input = await body(req);
       const to = email(input.email);
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || to.length > 254) throw fail(400, 'Enter a valid email address.');
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || to.length > 254)
+        throw fail(400, 'Enter a valid email address.');
       if (!['admin', 'member'].includes(input.role)) throw fail(400, 'Choose admin or member.');
       if (input.role === 'admin') requireRole(ws, 'owner');
       const members = await store.members(ws.id);
-      if (to === user.email && ws.id === user.id) throw fail(400, 'You already own this workspace.');
+      if (to === user.email && ws.id === user.id)
+        throw fail(400, 'You already own this workspace.');
       if (members.some((x) => x.email === to)) throw fail(400, 'This person is already a member.');
       if (members.length >= 25) throw fail(400, 'This workspace has reached its 25-member limit.');
       const token = randomBytes(32).toString('hex');
@@ -359,7 +403,10 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       const invite = hex(token) && (await store.getInvite(sessionHash(token)));
       if (!invite) throw fail(410, 'This invitation has expired or was revoked.');
       if (invite.email !== user.email)
-        throw fail(403, `This invitation was sent to ${invite.email}. Sign in with that email to accept it.`);
+        throw fail(
+          403,
+          `This invitation was sent to ${invite.email}. Sign in with that email to accept it.`,
+        );
       if (invite.workspace_id === user.id) throw fail(400, 'You already own this workspace.');
       const member = await store.acceptInvite(sessionHash(token), {
         user_id: user.id,
@@ -367,9 +414,14 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
         name: user.name,
         joined: new Date().toISOString(),
       });
-      json(res, 200, { id: member.workspace_id, name: member.workspaceName, role: member.role }, {
-        'Set-Cookie': cookie('bw_workspace', member.workspace_id, 604800),
-      });
+      json(
+        res,
+        200,
+        { id: member.workspace_id, name: member.workspaceName, role: member.role },
+        {
+          'Set-Cookie': cookie('bw_workspace', member.workspace_id, 604800),
+        },
+      );
       return true;
     }
     const memberMatch = /^\/api\/team\/members\/([a-f0-9-]{36})$/.exec(path);
@@ -391,7 +443,12 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
           if (target.role === 'admin') requireRole(ws, 'owner');
         }
         await store.removeMember(ws.id, target.user_id);
-        json(res, 200, { removed: true }, leaving ? { 'Set-Cookie': cookie('bw_workspace', '', 0) } : {});
+        json(
+          res,
+          200,
+          { removed: true },
+          leaving ? { 'Set-Cookie': cookie('bw_workspace', '', 0) } : {},
+        );
         return true;
       }
     }
@@ -412,7 +469,10 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       if (action === 'setup') {
         if (security.totp) throw fail(409, 'Two-factor authentication is already on.');
         const secret = newSecret();
-        await store.setSecurity(user.email, security.version || 0, { ...security, pendingSecret: secret });
+        await store.setSecurity(user.email, security.version || 0, {
+          ...security,
+          pendingSecret: secret,
+        });
         json(res, 200, { secret, uri: otpauthURL(secret, user.email) });
         return true;
       }
@@ -420,7 +480,8 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
         if (security.totp) throw fail(409, 'Two-factor authentication is already on.');
         if (!security.pendingSecret) throw fail(400, 'Start the setup again.');
         const step = verifyTotp(security.pendingSecret, input.code);
-        if (step === null) throw fail(400, 'That code did not match. Check the time on your phone and try again.');
+        if (step === null)
+          throw fail(400, 'That code did not match. Check the time on your phone and try again.');
         const { codes, hashes } = newRecoveryCodes();
         const { pendingSecret, ...rest } = security;
         await store.setSecurity(user.email, security.version || 0, {
@@ -434,7 +495,8 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       if (action === 'disable') {
         if (!security.totp) throw fail(409, 'Two-factor authentication is already off.');
         if (!verifyPassword(profile, input.password)) throw fail(400, 'The password is incorrect.');
-        if (!(await secondFactor(profile, input.code))) throw fail(400, 'Enter a valid authenticator or recovery code.');
+        if (!(await secondFactor(profile, input.code)))
+          throw fail(400, 'Enter a valid authenticator or recovery code.');
         const fresh = (await store.userByEmail(user.email)).security;
         const { totp, recoveryCodes, pendingSecret, ...rest } = fresh;
         await store.setSecurity(user.email, fresh.version, rest);
@@ -451,9 +513,11 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       rate('delete:' + user.id, 5);
       const input = await body(req);
       const profile = await store.userByEmail(user.email);
-      if (email(input.confirm) !== user.email) throw fail(400, 'Type your email address to confirm.');
+      if (email(input.confirm) !== user.email)
+        throw fail(400, 'Type your email address to confirm.');
       if (!verifyPassword(profile, input.password)) throw fail(400, 'The password is incorrect.');
-      if (!(await secondFactor(profile, input.code))) throw fail(400, 'Enter a valid authenticator or recovery code.');
+      if (!(await secondFactor(profile, input.code)))
+        throw fail(400, 'Enter a valid authenticator or recovery code.');
       await store.deleteAccount(user);
       json(res, 200, { deleted: true }, { 'Set-Cookie': clearSession });
       return true;
@@ -473,7 +537,11 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
     }
     if (path === '/api/pages' && m === 'GET') {
       const pages = await store.pages(ws.id);
-      json(res, 200, pages.map(({ kind, token, created }) => ({ kind, token, created })));
+      json(
+        res,
+        200,
+        pages.map(({ kind, token, created }) => ({ kind, token, created })),
+      );
       return true;
     }
     if (path === '/api/pages' && m === 'POST') {
@@ -484,7 +552,14 @@ export function createFeatures({ store, billing, fail, body, json, rate, session
       if (kind === 'booking' && !(await store.getSetting(ws.id, 'availability')))
         throw fail(400, 'Set your weekly availability before publishing a booking page.');
       const token = randomBytes(32).toString('hex');
-      const page = { kind, token, hash: sessionHash(token), workspace_id: ws.id, brand: ws.name, created: new Date().toISOString() };
+      const page = {
+        kind,
+        token,
+        hash: sessionHash(token),
+        workspace_id: ws.id,
+        brand: ws.name,
+        created: new Date().toISOString(),
+      };
       await store.createPage(ws.id, page);
       json(res, 201, { kind, token, created: page.created });
       return true;

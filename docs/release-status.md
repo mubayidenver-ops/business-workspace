@@ -21,7 +21,14 @@ This is a runnable first development release, not a launched paid service. All 3
 - All 30 module record screens: create, edit, search, pagination, archive, restore and CSV export.
 - Invoice balance and project profit calculations; quotation amounts and printable records.
 - Appointment conflict prevention; due-date notifications displayed in-app.
-- Feedback votes limited to one per signed-in workspace account (team voting requires team access later).
+- Feedback votes: one per workspace member in the app, and one per browser on the public feedback board.
+- Team workspaces: invitation links (7 days, bound to the invited email), owner/admin/member roles, workspace switching, leaving and removing members (25 members per workspace). Members create and edit records; admins also archive, share, publish public pages and invite members; only the owner manages billing and admins.
+- Account security: authenticator-app (TOTP) two-factor sign-in with replay protection and 8 single-use recovery codes, sign out of every session, and password-confirmed account deletion that removes the owner's workspace and memberships.
+- Public workspace pages (one link per type, replaceable): feedback board with voting and moderated submissions, testimonial wall with moderated consented submissions, searchable help centre, uptime status page, and a booking page.
+- Bookings: weekly availability windows in a chosen time zone (DST-aware) with slot length, buffer, minimum notice and horizon; guests receive a private link to reschedule or cancel.
+- Projects: per-project timesheets (billable/non-billable hours, billable rate) and a cross-project profit report with per-currency totals and CSV export.
+- Equipment: recurring service intervals, work orders, service logging that advances the next due date and closes the linked work order, and service history.
+- Spreadsheet cleanup imports .xlsx workbooks (any worksheet) in the browser without uploading them.
 - CSV parsing with quoted cells and multiline fields, trim/deduplicate, inconsistent-column warnings and formula-safe export.
 - PDF merge and page extraction; PNG/JPG/WebP input with proportional PNG/JPG resize output.
 - SRT editing and SRT/WebVTT export, local content templates, quiz creation/session scoring/JSON export and three English hospitality exercises.
@@ -32,10 +39,10 @@ This is a runnable first development release, not a launched paid service. All 3
 
 - Subscriptions, checkout, refunds and verified paid download fulfilment. The app cannot collect revenue yet.
 - Email/SMS delivery, calendar integrations, automatic transcription/translation, AI generation and video rendering.
-- Client-facing approvals, public onboarding/booking pages, hosted portfolios, public help centre, storefront and external podcast publishing.
-- File uploads/private object storage, team memberships/invitations/roles, password reset/email verification, two-factor authentication and account deletion workflow.
+- Hosted portfolios, storefront and external podcast publishing.
+- File uploads/private object storage, password reset/email verification, and email delivery of team invitations or booking confirmations (links are copied and sent manually).
 - PostgreSQL and durable distributed jobs. The approved production architecture is documented; SQLite and an in-process scheduler are a deliberate development bootstrap.
-- Complete curriculum, multiple language support, XLSX imports, advanced quotation line items and time-entry accounting.
+- Complete curriculum, multiple language support, advanced quotation line items, XLSX export and payroll-grade time accounting.
 
 ## Data lifecycle and production boundary
 

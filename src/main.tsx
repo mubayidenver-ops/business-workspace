@@ -23,6 +23,10 @@ import { PasswordModal } from './PasswordModal';
 import { BillingPanel } from './BillingPanel';
 import { CommandPalette } from './CommandPalette';
 import { downloadAppointment } from './calendar';
+import { TeamPanel, SecurityPanel, WorkspaceSwitcher, type Workspace } from './TeamSecurity';
+import { PublicPagesPanel, WorkspacePage, BookingManage, InvitePage } from './PublicPages';
+import { TimesheetModal, ProfitReport, WorkOrdersModal } from './ProjectTools';
+import { projectFinancials } from '../shared/projects.mjs';
 import './styles.css';
 import './pro.css';
 const tools = registry as Tool[];
@@ -79,7 +83,13 @@ const groupIcons: Record<string, string> = {
   Commerce: 'ShoppingBag',
 };
 const getTool = (id: string) => tools.find((t) => t.id === id)!;
-type State = { user: User; records: Item[]; checks: Check[]; storage?: string };
+type State = {
+  user: User;
+  workspace: Workspace;
+  records: Item[];
+  checks: Check[];
+  storage?: string;
+};
 function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
   const [mode] = useState(
       new URLSearchParams(location.search).get('auth') === 'login' ? 'login' : 'register',
@@ -89,6 +99,8 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     [password, setPassword] = useState(''),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
+    [code, setCode] = useState(''),
+    [twoFactor, setTwoFactor] = useState(false),
     [error, setError] = useState('');
   const ref = useRef<HTMLFormElement>(null);
   async function submit(e: FormEvent) {
@@ -104,9 +116,10 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     }
     setBusy(true);
     try {
-      await api('/auth', 'POST', { mode, name, email, password });
+      await api('/auth', 'POST', { mode, name, email, password, ...(twoFactor ? { code } : {}) });
       await onAuth();
     } catch (e) {
+      if ((e as { twoFactorRequired?: boolean }).twoFactorRequired) setTwoFactor(true);
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -208,6 +221,18 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
               </span>
             </label>
             <small className="muted">At least 10 characters. Use a unique password.</small>
+            {twoFactor && (
+              <label>
+                Authenticator or recovery code
+                <input
+                  autoFocus
+                  autoComplete="one-time-code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  required
+                />
+              </label>
+            )}
             <p className="error" id="auth-error" role="alert">
               {error}
             </p>
@@ -237,8 +262,12 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     </main>
   );
 }
-function App() {
+function App({ pendingInvite }: { pendingInvite?: string | null }) {
   const [sharing, setSharing] = useState<Item | null>(null);
+  const [toolModal, setToolModal] = useState<{
+    kind: 'timesheet' | 'service';
+    item: Item;
+  } | null>(null);
   const [converting, setConverting] = useState('');
   const [state, setState] = useState<State | null>(null),
     [initial, setInitial] = useState(true),
@@ -278,6 +307,12 @@ function App() {
     [page, setPage] = useState(1),
     [refreshing, setRefreshing] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (state && pendingInvite) {
+      sessionStorage.removeItem('bw-invite');
+      location.assign('/#invite=' + pendingInvite);
+    }
+  }, [state, pendingInvite]);
   useEffect(() => {
     if (!state || editing || sharing || archive || checkResult || (panel && panel !== 'commands'))
       return;
@@ -483,10 +518,14 @@ function App() {
             </span>
           </a>
           <button className="workspace-switch" onClick={() => setPanel('settings')}>
-            <span className="avatar">{state.user.name.slice(0, 1).toUpperCase()}</span>
+            <span className="avatar">{state.workspace.name.slice(0, 1).toUpperCase()}</span>
             <span>
-              {state.user.name}
-              <small>Personal workspace</small>
+              {state.workspace.name}
+              <small>
+                {state.workspace.id === state.user.id
+                  ? 'Your workspace'
+                  : `${state.workspace.role} · ${state.user.name}`}
+              </small>
             </span>
             <Icons.ChevronsUpDown size={15} />
           </button>
@@ -908,6 +947,12 @@ function App() {
                     <h1>{currentTool.name}</h1>
                     <p className="muted">{currentTool.description}</p>
                   </div>
+                  {currentTool.id === 'projects' && (
+                    <button onClick={() => setPanel('profit')}>
+                      <Icons.ChartNoAxesColumn size={17} />
+                      Profit report
+                    </button>
+                  )}
                   <button
                     className="primary"
                     onClick={() => setEditing({ tool: currentTool, item: null })}
@@ -1087,6 +1132,20 @@ function App() {
                                         }}
                                       >
                                         <Icons.History size={16} />
+                                      </button>
+                                    )}
+                                    {r.module === 'projects' && !r.archived && (
+                                      <button
+                                        onClick={() => setToolModal({ kind: 'timesheet', item: r })}
+                                      >
+                                        Timesheet
+                                      </button>
+                                    )}
+                                    {r.module === 'equipment' && !r.archived && (
+                                      <button
+                                        onClick={() => setToolModal({ kind: 'service', item: r })}
+                                      >
+                                        Service
                                       </button>
                                     )}
                                     {r.module === 'onboarding' && !r.archived && (
@@ -1413,10 +1472,32 @@ function App() {
                 <p className="muted">{state.user.email}</p>
               </div>
             </div>
+            <WorkspaceSwitcher current={state.workspace} />
             <dl className="settings-list">
               <div>
-                <dt>Workspace access</dt>
-                <dd>Private · one account</dd>
+                <dt>Workspace</dt>
+                <dd>
+                  {state.workspace.name} · you are {state.workspace.role}{' '}
+                  <button className="link-button" onClick={() => setPanel('team')}>
+                    Manage team
+                  </button>
+                </dd>
+              </div>
+              <div>
+                <dt>Public pages</dt>
+                <dd>
+                  <button className="link-button" onClick={() => setPanel('pages')}>
+                    Help centre, status, feedback, testimonials, booking
+                  </button>
+                </dd>
+              </div>
+              <div>
+                <dt>Security</dt>
+                <dd>
+                  <button className="link-button" onClick={() => setPanel('security')}>
+                    Two-factor, sessions, account deletion
+                  </button>
+                </dd>
               </div>
               <div>
                 <dt>Storage</dt>
@@ -1606,6 +1687,40 @@ function App() {
         />
       )}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
+      {panel === 'team' && (
+        <TeamPanel
+          workspace={state.workspace}
+          user={state.user}
+          onClose={() => setPanel('settings')}
+        />
+      )}
+      {panel === 'security' && (
+        <SecurityPanel user={state.user} onClose={() => setPanel('settings')} />
+      )}
+      {panel === 'pages' && (
+        <PublicPagesPanel workspace={state.workspace} onClose={() => setPanel('settings')} />
+      )}
+      {panel === 'profit' && <ProfitReport records={state.records} onClose={() => setPanel('')} />}
+      {toolModal?.kind === 'timesheet' && (
+        <TimesheetModal
+          item={toolModal.item}
+          onClose={() => setToolModal(null)}
+          onSaved={() => {
+            setToolModal(null);
+            void saved();
+          }}
+        />
+      )}
+      {toolModal?.kind === 'service' && (
+        <WorkOrdersModal
+          item={toolModal.item}
+          onClose={() => setToolModal(null)}
+          onSaved={() => {
+            setToolModal(null);
+            void saved();
+          }}
+        />
+      )}
       {quoteHistory && (
         <Modal title="Quote revisions" onClose={() => setQuoteHistory(null)}>
           <div className="modal-body">
@@ -1712,9 +1827,7 @@ function RecordSummary({ item: r }: { item: Item }) {
   if (['projects', 'invoices', 'proposals', 'catalogues', 'store', 'licences'].includes(r.module)) {
     const n =
       r.module === 'projects'
-        ? Number(r.data.amount || 0) -
-          Number(r.data.cost || 0) -
-          Number(r.data.billableHours || 0) * Number(r.data.hourlyCost || 0)
+        ? projectFinancials(r.data).profit
         : r.module === 'invoices'
           ? Number(r.data.amount || 0) - Number(r.data.paid || 0)
           : r.data.amount;
@@ -1756,8 +1869,14 @@ function Entry() {
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   }, []);
-  const token = new URLSearchParams(hash.slice(1)).get('share');
-  return token ? <PublicPage token={token} /> : <App />;
+  const params = new URLSearchParams(hash.slice(1));
+  const token = params.get('share');
+  if (token) return <PublicPage token={token} />;
+  if (params.get('page')) return <WorkspacePage token={params.get('page')!} />;
+  if (params.get('manage')) return <BookingManage token={params.get('manage')!} />;
+  if (params.get('invite')) return <InvitePage token={params.get('invite')!} />;
+  const pendingInvite = sessionStorage.getItem('bw-invite');
+  return <App pendingInvite={pendingInvite} />;
 }
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

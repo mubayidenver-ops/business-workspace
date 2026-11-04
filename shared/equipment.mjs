@@ -26,7 +26,8 @@ export function parseWorkOrders(value) {
     const id = String(o.id || '');
     const title = String(o.title || '').trim();
     if (!/^[a-zA-Z0-9-]{8,40}$/.test(id)) throw new Error(`${label} has an invalid id.`);
-    if (!title || title.length > 180) throw new Error(`${label} needs a title of 1–180 characters.`);
+    if (!title || title.length > 180)
+      throw new Error(`${label} needs a title of 1–180 characters.`);
     if (!workOrderStatuses.includes(o.status)) throw new Error(`${label} needs a valid status.`);
     const due = String(o.due || ''),
       completed = String(o.completed || '');
@@ -79,7 +80,12 @@ export function completeService(data, input) {
   const workOrder = input.workOrderId ? String(input.workOrderId) : '';
   if (workOrder && !orders.some((o) => o.id === workOrder))
     throw new Error('That work order is no longer on this asset.');
-  const entry = { date, notes, cost: cost(input.cost, 'Service'), ...(workOrder ? { workOrder } : {}) };
+  const entry = {
+    date,
+    notes,
+    cost: cost(input.cost, 'Service'),
+    ...(workOrder ? { workOrder } : {}),
+  };
   const next = [entry, ...log].slice(0, 200);
   const interval = Number(data.serviceIntervalDays || 0);
   return {
