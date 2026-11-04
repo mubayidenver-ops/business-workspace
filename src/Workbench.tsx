@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Upload, Download, Plus, Check, FileText } from 'lucide-react';
-import { cleanCSV, writeCSV } from '../shared/csv.mjs';
+import { cleanCSV, cleanRows, writeCSV } from '../shared/csv.mjs';
+import { readXlsx } from '../shared/xlsx.mjs';
 import { download } from './lib';
 import type { Tool } from './types';
 type CsvResult = { rows: string[][]; duplicates: number; empty: number; warnings: string[] };
@@ -43,11 +44,13 @@ function CSVBox({ onError }: { onError: (s: string) => void }) {
   const [text, setText] = useState(''),
     [delimiter, setDelimiter] = useState(','),
     [output, setOutput] = useState(','),
-    [result, setResult] = useState<CsvResult | null>(null);
+    [result, setResult] = useState<CsvResult | null>(null),
+    [sheets, setSheets] = useState<{ name: string; rows: string[][] }[]>([]),
+    [sheet, setSheet] = useState(0);
   function run() {
     onError('');
     try {
-      setResult(cleanCSV(text, delimiter));
+      setResult(sheets.length ? cleanRows(sheets[sheet].rows) : cleanCSV(text, delimiter));
     } catch (e) {
       setResult(null);
       onError((e as Error).message);
@@ -63,6 +66,7 @@ function CSVBox({ onError }: { onError: (s: string) => void }) {
             rows={9}
             style={{ resize: 'none' }}
             value={text}
+            readOnly={sheets.length > 0}
             onChange={(e) => {
               setText(e.target.value);
               setResult(null);
@@ -73,24 +77,66 @@ function CSVBox({ onError }: { onError: (s: string) => void }) {
         <div>
           <label className="upload">
             <Upload size={24} />
-            <strong>Choose a CSV file</strong>
-            <span>Up to 2 MB · quoted fields supported</span>
+            <strong>Choose a CSV or Excel file</strong>
+            <span>CSV, TSV or .xlsx · up to 5 MB · processed in your browser</span>
             <input
               type="file"
-              accept=".csv,.tsv,text/csv,text/tab-separated-values"
+              accept=".csv,.tsv,.xlsx,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
-                if (file.size > 2e6) {
-                  onError('Choose a file smaller than 2 MB.');
+                if (file.size > 5e6) {
+                  onError('Choose a file smaller than 5 MB.');
                   return;
                 }
-                setText(await file.text());
+                if (/\.xlsx$/i.test(file.name)) {
+                  try {
+                    const book = await readXlsx(new Uint8Array(await file.arrayBuffer()));
+                    setSheets(book);
+                    setSheet(0);
+                    setText(
+                      book[0].rows
+                        .slice(0, 50)
+                        .map((r) => r.join('\t'))
+                        .join('\n'),
+                    );
+                  } catch (error) {
+                    onError((error as Error).message);
+                    return;
+                  }
+                } else {
+                  setSheets([]);
+                  setText(await file.text());
+                }
                 setResult(null);
                 onError('');
               }}
             />
           </label>
+          {sheets.length > 1 && (
+            <label>
+              Worksheet
+              <select
+                value={sheet}
+                onChange={(e) => {
+                  setSheet(Number(e.target.value));
+                  setText(
+                    sheets[Number(e.target.value)].rows
+                      .slice(0, 50)
+                      .map((r) => r.join('\t'))
+                      .join('\n'),
+                  );
+                  setResult(null);
+                }}
+              >
+                {sheets.map((s, i) => (
+                  <option key={s.name} value={i}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="form-grid">
             <label>
               Input separator

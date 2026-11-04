@@ -20,6 +20,8 @@ import {
   collectionModules,
 } from './public-sharing.mjs';
 import { Billing } from './billing.mjs';
+import { createFeatures } from './features.mjs';
+import { completeService } from '../shared/equipment.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const store = await createStore(root);
@@ -62,6 +64,7 @@ function rate(key, max = 20) {
   if (++v.n > max) throw fail(429, 'Too many attempts. Try again in 15 minutes.');
 }
 const sessionHash = (t) => createHash('sha256').update(t).digest('hex');
+const features = createFeatures({ store, billing, fail, body, json, rate, sessionHash });
 async function userFor(req) {
   const token = /\bbw_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
   return token ? store.sessionUser(sessionHash(token)) : null;
@@ -134,6 +137,13 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (!url.pathname.startsWith('/api/')) {
+    try {
+      decodeURIComponent(url.pathname);
+    } catch {
+      res.writeHead(400);
+      res.end('Invalid URL');
+      return;
+    }
     if (vite) {
       vite.middlewares(req, res, () => {
         res.writeHead(404);
@@ -254,6 +264,7 @@ const server = createServer(async (req, res) => {
       );
       return;
     }
+    if (await features.publicRoute(req, res, url)) return;
     if (url.pathname === '/api/public') {
       const token = req.headers['x-workspace-share'];
       if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token))
@@ -315,7 +326,11 @@ const server = createServer(async (req, res) => {
             { data: JSON.stringify(data), status: 'Active' },
             selected.id,
           );
-          json(res, 200, { received: true, action: 'book' });
+          json(res, 200, {
+            received: true,
+            action: 'book',
+            manageToken: await features.createManageToken(share.user_id, selected.id),
+          });
           return;
         }
         throw fail(405, 'This action is not available.');
@@ -368,7 +383,13 @@ const server = createServer(async (req, res) => {
                 ? 'Completed'
                 : 'In review',
         });
-        json(res, 200, { received: true, action: response.action });
+        json(res, 200, {
+          received: true,
+          action: response.action,
+          ...(response.action === 'book'
+            ? { manageToken: await features.createManageToken(share.user_id, record.id) }
+            : {}),
+        });
         return;
       }
       throw fail(405, 'This action is not available.');
@@ -444,6 +465,7 @@ const server = createServer(async (req, res) => {
       }
       throw fail(409, 'Authenticator settings have changed. Reload and try again.');
     }
+    if (await features.accountRoute(req, res, url, actor)) return;
     if (url.pathname === '/api/password' && req.method === 'POST') {
       rate('password:' + user.id, 10);
       const b = await body(req);
@@ -543,6 +565,8 @@ const server = createServer(async (req, res) => {
       if (!read && !edit) throw fail(403, 'Only the workspace owner can perform this action.');
       user = { id: selected, name: membership.ownerName };
     }
+    if (await features.workspaceRoute(req, res, url, actor, { id: user.id, name: user.name, role }))
+      return;
     if (url.pathname === '/api/state' && req.method === 'GET') {
       const state = await store.state(user.id);
       json(res, 200, {
@@ -655,7 +679,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     const match =
-      /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions|draft|renew))?$/.exec(
+      /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions|draft|renew|service))?$/.exec(
         url.pathname,
       );
     if (match) {
@@ -837,6 +861,26 @@ const server = createServer(async (req, res) => {
         json(res, 200, { ok: true });
         return;
       }
+      if (match[2] === 'service' && req.method === 'POST') {
+        if (r.module !== 'equipment') throw fail(400, 'Only equipment can log a service.');
+        const b = await body(req);
+        if (b.version !== r.version) throw fail(409, 'This asset changed. Reopen it first.');
+        let record;
+        try {
+          record = validateRecord('equipment', {
+            title: r.title,
+            status: r.status,
+            data: completeService(JSON.parse(r.data), b),
+          });
+        } catch (e) {
+          throw fail(400, e.message);
+        }
+        const updated = await store.updateRecord(user.id, r.id, b.version, {
+          data: JSON.stringify(record.data),
+        });
+        json(res, 200, toRecord(updated));
+        return;
+      }
       if (req.method === 'PATCH' && !match[2]) {
         const b = await body(req);
         if (
@@ -866,6 +910,9 @@ const server = createServer(async (req, res) => {
           }
           const existing = JSON.parse(r.data);
           if (existing.clientResponse) record.data.clientResponse = existing.clientResponse;
+          for (const key of ['timeEntries', 'workOrders', 'serviceLog'])
+            if (existing[key] !== undefined && b.data?.[key] === undefined)
+              record.data[key] = existing[key];
           if (existing.lastCompleted) record.data.lastCompleted = existing.lastCompleted;
           patch = { title: record.title, status: record.status, data: JSON.stringify(record.data) };
         }
@@ -885,6 +932,7 @@ const server = createServer(async (req, res) => {
     if (!res.headersSent)
       json(res, e.status || 500, {
         error: e.status ? e.message : 'Something went wrong. Please try again.',
+        ...(e.status && e.extra ? e.extra : {}),
       });
   }
 });

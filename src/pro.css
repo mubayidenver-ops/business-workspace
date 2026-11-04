@@ -1410,3 +1410,147 @@
     display: none;
   }
 }
+
+/* Teams, security, public pages, timesheets and work orders */
+.team-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.team-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 10px;
+}
+.team-list li > span:first-child {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.chip {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--soft, #f1f5f9);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.copy-box {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  background: var(--soft, #f8fafc);
+}
+.copy-box code,
+.page-link,
+.secret {
+  word-break: break-all;
+  white-space: pre-wrap;
+  font-size: 0.82rem;
+}
+.window-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+.span-2 {
+  grid-column: 1 / -1;
+}
+.slot-days {
+  display: grid;
+  gap: 0.75rem;
+  grid-column: 1 / -1;
+}
+.slot-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+.board {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+.board li {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+.vote {
+  min-width: 4rem;
+  justify-content: center;
+}
+.dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  margin-top: 0.4rem;
+  flex: none;
+  background: #94a3b8;
+}
+.dot.up {
+  background: #16a34a;
+}
+.dot.down {
+  background: #dc2626;
+}
+.status-operational {
+  color: #15803d;
+}
+.status-degraded {
+  color: #b91c1c;
+}
+.mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  margin: 0.5rem 0 1rem;
+}
+.mini-table th,
+.mini-table td {
+  text-align: left;
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--line, #e5e7eb);
+}
+.mini-table input,
+.mini-table select {
+  min-width: 0;
+  width: 100%;
+}
+.report-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.report-totals .stat {
+  display: grid;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  background: var(--soft, #f8fafc);
+}
+.negative {
+  color: #b91c1c;
+}
+.prewrap {
+  white-space: pre-wrap;
+}
+.check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+button.danger {
+  color: #b91c1c;
+  border-color: #fecaca;
+}

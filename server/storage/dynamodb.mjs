@@ -7,6 +7,7 @@ import {
   QueryCommand,
   PutCommand,
   DeleteCommand,
+  UpdateCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
@@ -174,7 +175,8 @@ export class DynamoStore {
     }));
   }
   async userByEmail(email) {
-    return omitKeys(await this.get(`ACCOUNT#${email}`, 'PROFILE'));
+    const profile = omitKeys(await this.get(`ACCOUNT#${email}`, 'PROFILE'));
+    return profile && { ...profile, security: profile.security || { version: 0 } };
   }
   async createUser(user) {
     try {
@@ -450,25 +452,194 @@ export class DynamoStore {
       return { items, result: record };
     });
   }
-  async vote(userId, id) {
-    return this.mutate(userId, async ({ records }) => {
-      const record = records.find((r) => r.id === id);
-      if (!record) throw storageError(404, 'This record is not available.');
-      if (await this.get(workspace(userId), `VOTE#${id}`)) return { result: undefined };
+  async vote(workspaceId, id, voterId = workspaceId) {
+    const sk = voterId === workspaceId ? `VOTE#${id}` : `VOTE#${id}#${voterId}`;
+    await this.addVote(workspaceId, id, sk);
+  }
+  async publicVote(workspaceId, id, voter) {
+    return this.addVote(workspaceId, id, `PUBVOTE#${id}#${voter}`, 'feedback');
+  }
+  async addVote(workspaceId, id, sk, module) {
+    return this.mutate(workspaceId, async ({ records }) => {
+      const record = records.find((r) => r.id === id && (!module || r.module === module));
+      if (!record)
+        throw storageError(
+          404,
+          module ? 'This request is no longer on the board.' : 'This record is not available.',
+        );
+      if (await this.get(workspace(workspaceId), sk)) return { result: false };
       return {
         items: [
           {
             Put: {
               TableName: this.table,
-              Item: { pk: workspace(userId), sk: `VOTE#${id}` },
+              Item: { pk: workspace(workspaceId), sk },
               ConditionExpression: 'attribute_not_exists(pk)',
             },
           },
           ...this.recordWrites({ ...record, votes: (record.votes || 0) + 1 }),
         ],
-        result: undefined,
+        result: true,
       };
     });
+  }
+  async putProfile(profile, expected) {
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: { pk: `ACCOUNT#${profile.email}`, sk: 'PROFILE', ...profile },
+          ConditionExpression: '#v = :v',
+          ExpressionAttributeNames: { '#v': expected.field },
+          ExpressionAttributeValues: { ':v': expected.value },
+        }),
+      );
+    } catch (e) {
+      if (collision(e))
+        throw storageError(409, 'Your security settings changed. Reload and try again.');
+      throw e;
+    }
+  }
+  async setSecurity(email, expectedVersion, security) {
+    const profile = await this.userByEmail(email);
+    if (!profile || (profile.security?.version || 0) !== expectedVersion)
+      throw storageError(409, 'Your security settings changed. Reload and try again.');
+    await this.putProfile(
+      { ...profile, security: { ...security, version: expectedVersion + 1 } },
+      { field: 'password', value: profile.password },
+    );
+  }
+  async revokeSessions(user) {
+    const profile = await this.userByEmail(user.email);
+    if (!profile) return;
+    const version = profile.credentialVersion || 0;
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.table,
+        Key: { pk: `ACCOUNT#${user.email}`, sk: 'PROFILE' },
+        UpdateExpression: 'SET credentialVersion = :next',
+        ConditionExpression: 'attribute_not_exists(credentialVersion) OR credentialVersion = :v',
+        ExpressionAttributeValues: { ':next': version + 1, ':v': version },
+      }),
+    );
+  }
+  async deleteItems(items) {
+    for (let i = 0; i < items.length; i += 25)
+      await Promise.all(
+        items
+          .slice(i, i + 25)
+          .map((item) =>
+            this.doc.send(
+              new DeleteCommand({ TableName: this.table, Key: { pk: item.pk, sk: item.sk } }),
+            ),
+          ),
+      );
+  }
+  async deleteAccount(user) {
+    await this.revokeSessions(user);
+    const pk = workspace(user.id);
+    const items = await this.query(pk);
+    const links = [];
+    for (const item of items) {
+      if (item.sk.startsWith('PAGE#')) links.push({ pk: `PAGE#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('BOOKINGTOKEN#'))
+        links.push({ pk: `BOOKING#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('MEMBER#'))
+        links.push({ pk: workspace(item.memberId), sk: `JOINED#${user.id}` });
+      if (item.sk.startsWith('JOINED#'))
+        links.push({ pk: workspace(item.ownerId), sk: `MEMBER#${user.id}` });
+      if (item.sk.startsWith('SHARE#') && item.hash)
+        links.push({ pk: `SHARE#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('RECORD#')) {
+        links.push({ pk: 'MONITORS', sk: `${user.id}#${item.id}` });
+        links.push({ pk: 'INVOICE_REMINDERS', sk: `${user.id}#${item.id}` });
+      }
+    }
+    await this.deleteItems([...links, ...items.filter((i) => i.sk !== 'META')]);
+    await this.deleteItems([
+      { pk, sk: 'META' },
+      { pk: `ACCOUNT#${user.email}`, sk: 'PROFILE' },
+    ]);
+  }
+  async getSetting(workspaceId, key) {
+    return (await this.get(workspace(workspaceId), `SETTING#${key}`))?.value ?? null;
+  }
+  async putSetting(workspaceId, key, value) {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { pk: workspace(workspaceId), sk: `SETTING#${key}`, value },
+      }),
+    );
+  }
+  async pages(workspaceId) {
+    return (await this.query(workspace(workspaceId), 'PAGE#')).map(omitKeys);
+  }
+  async createPage(workspaceId, page) {
+    const previous = await this.get(workspace(workspaceId), `PAGE#${page.kind}`);
+    const item = { ...page, workspace_id: workspaceId };
+    await this.doc.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          ...(previous
+            ? [
+                {
+                  Delete: {
+                    TableName: this.table,
+                    Key: { pk: `PAGE#${previous.hash}`, sk: 'LINK' },
+                  },
+                },
+              ]
+            : []),
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: workspace(workspaceId), sk: `PAGE#${page.kind}`, ...item },
+            },
+          },
+          {
+            Put: { TableName: this.table, Item: { pk: `PAGE#${page.hash}`, sk: 'LINK', ...item } },
+          },
+        ],
+      }),
+    );
+  }
+  async deletePage(workspaceId, kind) {
+    const previous = await this.get(workspace(workspaceId), `PAGE#${kind}`);
+    if (!previous) return;
+    await this.deleteItems([previous, { pk: `PAGE#${previous.hash}`, sk: 'LINK' }]);
+  }
+  async pageByHash(hash) {
+    return omitKeys(await this.get(`PAGE#${hash}`, 'LINK'));
+  }
+  async createBookingToken(workspaceId, recordId, hash) {
+    const previous = await this.get(workspace(workspaceId), `BOOKINGTOKEN#${recordId}`);
+    if (previous) await this.deleteItems([{ pk: `BOOKING#${previous.hash}`, sk: 'LINK' }]);
+    const item = { hash, workspace_id: workspaceId, record_id: recordId };
+    await this.doc.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: this.table,
+              Item: { pk: workspace(workspaceId), sk: `BOOKINGTOKEN#${recordId}`, ...item },
+            },
+          },
+          { Put: { TableName: this.table, Item: { pk: `BOOKING#${hash}`, sk: 'LINK', ...item } } },
+        ],
+      }),
+    );
+  }
+  async bookingToken(hash) {
+    return omitKeys(await this.get(`BOOKING#${hash}`, 'LINK'));
+  }
+  async deleteBookingToken(hash) {
+    const item = await this.bookingToken(hash);
+    if (!item) return;
+    await this.deleteItems([
+      { pk: `BOOKING#${hash}`, sk: 'LINK' },
+      { pk: workspace(item.workspace_id), sk: `BOOKINGTOKEN#${item.record_id}` },
+    ]);
   }
   async state(userId) {
     const [{ records }, checks] = await Promise.all([

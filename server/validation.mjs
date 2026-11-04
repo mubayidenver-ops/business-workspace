@@ -2,6 +2,8 @@ import { registrationDomain } from './rdap.mjs';
 import { validateAttachment } from './attachments.mjs';
 import { byId, statuses } from '../shared/tools.mjs';
 import { calculateDocument } from '../shared/pricing.mjs';
+import { parseTimeEntries } from '../shared/projects.mjs';
+import { parseWorkOrders, parseServiceLog } from '../shared/equipment.mjs';
 export function validateRecord(module, input) {
   const tool = Object.hasOwn(byId, module) ? byId[module] : null;
   if (!tool) throw new Error('Unknown tool.');
@@ -81,6 +83,12 @@ export function validateRecord(module, input) {
       throw new Error('Choose a valid date and time.');
     data[field.key] = value;
   }
+  const structured = {
+    projects: { timeEntries: parseTimeEntries },
+    equipment: { workOrders: parseWorkOrders, serviceLog: parseServiceLog },
+  }[module];
+  for (const [key, parse] of Object.entries(structured || {}))
+    if (input.data?.[key] !== undefined) data[key] = JSON.stringify(parse(input.data[key]));
   if (data.registrationDomain) {
     data.registrationDomain = registrationDomain(data.registrationDomain);
     if (!data.registrationDomain) throw new Error('Enter a registered domain such as example.com.');

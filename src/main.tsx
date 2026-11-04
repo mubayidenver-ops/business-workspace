@@ -27,6 +27,10 @@ import { BookingSeries } from './BookingSeries';
 import { DraftPanel, aiModules } from './DraftPanel';
 import { CommandPalette } from './CommandPalette';
 import { downloadAppointment } from './calendar';
+import { SecurityPanel } from './TeamSecurity';
+import { PublicPagesPanel, WorkspacePage, BookingManage } from './PublicPages';
+import { TimesheetModal, ProfitReport, WorkOrdersModal } from './ProjectTools';
+import { projectFinancials } from '../shared/projects.mjs';
 import './styles.css';
 import './pro.css';
 const tools = registry as Tool[];
@@ -99,9 +103,9 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
     [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
     [mfaRequired, setMfaRequired] = useState(false),
-    [code, setCode] = useState(''),
     [show, setShow] = useState(false),
     [busy, setBusy] = useState(false),
+    [code, setCode] = useState(''),
     [error, setError] = useState('');
   const ref = useRef<HTMLFormElement>(null);
   async function submit(e: FormEvent) {
@@ -274,6 +278,10 @@ function Auth({ onAuth }: { onAuth: () => Promise<void> }) {
 }
 function App() {
   const [sharing, setSharing] = useState<Item | null>(null);
+  const [toolModal, setToolModal] = useState<{
+    kind: 'timesheet' | 'service';
+    item: Item;
+  } | null>(null);
   const [converting, setConverting] = useState('');
   const [state, setState] = useState<State | null>(null),
     [initial, setInitial] = useState(true),
@@ -955,6 +963,12 @@ function App() {
                     <h1>{currentTool.name}</h1>
                     <p className="muted">{currentTool.description}</p>
                   </div>
+                  {currentTool.id === 'projects' && (
+                    <button onClick={() => setPanel('profit')}>
+                      <Icons.ChartNoAxesColumn size={17} />
+                      Profit report
+                    </button>
+                  )}
                   <button
                     className="primary"
                     onClick={() => setEditing({ tool: currentTool, item: null })}
@@ -1139,6 +1153,20 @@ function App() {
                                         }}
                                       >
                                         <Icons.History size={16} />
+                                      </button>
+                                    )}
+                                    {r.module === 'projects' && !r.archived && (
+                                      <button
+                                        onClick={() => setToolModal({ kind: 'timesheet', item: r })}
+                                      >
+                                        Timesheet
+                                      </button>
+                                    )}
+                                    {r.module === 'equipment' && !r.archived && (
+                                      <button
+                                        onClick={() => setToolModal({ kind: 'service', item: r })}
+                                      >
+                                        Service
                                       </button>
                                     )}
                                     {r.module === 'onboarding' && !r.archived && (
@@ -1512,6 +1540,26 @@ function App() {
                 </dd>
               </div>
               <div>
+                <dt>Public pages</dt>
+                <dd>
+                  <button
+                    className="link-button"
+                    disabled={!isOwner}
+                    onClick={() => setPanel('pages')}
+                  >
+                    Help centre, status, feedback, testimonials, booking
+                  </button>
+                </dd>
+              </div>
+              <div>
+                <dt>Security</dt>
+                <dd>
+                  <button className="link-button" onClick={() => setPanel('security')}>
+                    Sign out everywhere, account deletion
+                  </button>
+                </dd>
+              </div>
+              <div>
                 <dt>Storage</dt>
                 <dd>{state.storage || 'Workspace database'}</dd>
               </div>
@@ -1712,6 +1760,33 @@ function App() {
       )}
       {panel === 'mfa' && <MfaPanel close={() => setPanel('settings')} />}
       {panel === 'password' && <PasswordModal onClose={() => setPanel('settings')} />}
+      {panel === 'security' && (
+        <SecurityPanel user={state.user} onClose={() => setPanel('settings')} />
+      )}
+      {panel === 'pages' && (
+        <PublicPagesPanel workspace={state.workspace} onClose={() => setPanel('settings')} />
+      )}
+      {panel === 'profit' && <ProfitReport records={state.records} onClose={() => setPanel('')} />}
+      {toolModal?.kind === 'timesheet' && (
+        <TimesheetModal
+          item={toolModal.item}
+          onClose={() => setToolModal(null)}
+          onSaved={() => {
+            setToolModal(null);
+            void saved();
+          }}
+        />
+      )}
+      {toolModal?.kind === 'service' && (
+        <WorkOrdersModal
+          item={toolModal.item}
+          onClose={() => setToolModal(null)}
+          onSaved={() => {
+            setToolModal(null);
+            void saved();
+          }}
+        />
+      )}
       {renewing && (
         <Modal
           title="Record completion"
@@ -1871,9 +1946,7 @@ function RecordSummary({ item: r }: { item: Item }) {
   if (['projects', 'invoices', 'proposals', 'catalogues', 'store', 'licences'].includes(r.module)) {
     const n =
       r.module === 'projects'
-        ? Number(r.data.amount || 0) -
-          Number(r.data.cost || 0) -
-          Number(r.data.billableHours || 0) * Number(r.data.hourlyCost || 0)
+        ? projectFinancials(r.data).profit
         : r.module === 'invoices'
           ? Number(r.data.amount || 0) - Number(r.data.paid || 0)
           : r.data.amount;
@@ -1915,8 +1988,12 @@ function Entry() {
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   }, []);
-  const token = new URLSearchParams(hash.slice(1)).get('share');
-  return token ? <PublicPage token={token} /> : <App />;
+  const params = new URLSearchParams(hash.slice(1));
+  const token = params.get('share');
+  if (token) return <PublicPage token={token} />;
+  if (params.get('page')) return <WorkspacePage token={params.get('page')!} />;
+  if (params.get('manage')) return <BookingManage token={params.get('manage')!} />;
+  return <App />;
 }
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
