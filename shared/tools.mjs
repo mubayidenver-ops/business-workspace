@@ -146,6 +146,7 @@ export const tools = [
     unit: 'appointment',
     fields: [
       f('client', 'Attendee or slot label', 'text', true),
+      f('email', 'Attendee email', 'email'),
       f('offerSlot', 'Offer this slot through a private booking link', 'checkbox'),
       f('start', 'Starts at', 'datetime-local', true),
       f('end', 'Ends at', 'datetime-local', true),
@@ -164,9 +165,10 @@ export const tools = [
     unit: 'project',
     fields: [
       f('client', 'Client'),
-      f('amount', 'Revenue', 'number'),
+      f('amount', 'Fixed revenue', 'number'),
+      f('hourlyRate', 'Billable rate per hour for timesheet hours', 'number'),
       f('cost', 'Expenses', 'number'),
-      f('billableHours', 'Billable hours', 'number'),
+      f('billableHours', 'Billable hours (used until timesheet entries exist)', 'number'),
       f('hourlyCost', 'Internal cost per hour (same currency)', 'number'),
       f('currency', 'Currency code'),
       f('due', 'Deadline', 'date'),
@@ -206,7 +208,7 @@ export const tools = [
     unit: 'article',
     fields: [f('category', 'Category'), f('notes', 'Article content', 'textarea', true)],
     integration:
-      'Searchable articles with expiring links for sharing individual guides. A full public help-centre website is not included yet.',
+      'Searchable articles. Publish every Active article on a public help-centre page from Settings → Public pages.',
   },
   {
     id: 'meetings',
@@ -417,6 +419,8 @@ export const tools = [
     fields: [
       f('client', 'Location or owner'),
       f('due', 'Next service', 'date'),
+      f('serviceIntervalDays', 'Repeat service every N days (0 = one-off)', 'number'),
+      f('lastService', 'Last serviced', 'date'),
       f('reminderDays', 'Show reminder this many days early (0–90)', 'number'),
       f('notes', 'Service instructions and history', 'textarea'),
     ],

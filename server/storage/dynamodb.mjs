@@ -7,6 +7,7 @@ import {
   QueryCommand,
   PutCommand,
   DeleteCommand,
+  UpdateCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'node:crypto';
@@ -103,7 +104,8 @@ export class DynamoStore {
     return result;
   }
   async userByEmail(email) {
-    return omitKeys(await this.get(`ACCOUNT#${email}`, 'PROFILE'));
+    const profile = omitKeys(await this.get(`ACCOUNT#${email}`, 'PROFILE'));
+    return profile && { ...profile, security: profile.security || { version: 0 } };
   }
   async createUser(user) {
     try {
@@ -320,25 +322,258 @@ export class DynamoStore {
       return { items, result: record };
     });
   }
-  async vote(userId, id) {
-    return this.mutate(userId, async ({ records }) => {
-      const record = records.find((r) => r.id === id);
-      if (!record) throw storageError(404, 'This record is not available.');
-      if (await this.get(workspace(userId), `VOTE#${id}`)) return { result: undefined };
+  async vote(workspaceId, id, voterId = workspaceId) {
+    const sk = voterId === workspaceId ? `VOTE#${id}` : `VOTE#${id}#${voterId}`;
+    await this.addVote(workspaceId, id, sk);
+  }
+  async publicVote(workspaceId, id, voter) {
+    return this.addVote(workspaceId, id, `PUBVOTE#${id}#${voter}`, 'feedback');
+  }
+  async addVote(workspaceId, id, sk, module) {
+    return this.mutate(workspaceId, async ({ records }) => {
+      const record = records.find((r) => r.id === id && (!module || r.module === module));
+      if (!record)
+        throw storageError(404, module ? 'This request is no longer on the board.' : 'This record is not available.');
+      if (await this.get(workspace(workspaceId), sk)) return { result: false };
       return {
         items: [
           {
             Put: {
               TableName: this.table,
-              Item: { pk: workspace(userId), sk: `VOTE#${id}` },
+              Item: { pk: workspace(workspaceId), sk },
               ConditionExpression: 'attribute_not_exists(pk)',
             },
           },
           ...this.recordWrites({ ...record, votes: (record.votes || 0) + 1 }),
         ],
-        result: undefined,
+        result: true,
       };
     });
+  }
+  async putProfile(profile, expected) {
+    try {
+      await this.doc.send(
+        new PutCommand({
+          TableName: this.table,
+          Item: { pk: `ACCOUNT#${profile.email}`, sk: 'PROFILE', ...profile },
+          ConditionExpression: '#v = :v',
+          ExpressionAttributeNames: { '#v': expected.field },
+          ExpressionAttributeValues: { ':v': expected.value },
+        }),
+      );
+    } catch (e) {
+      if (collision(e)) throw storageError(409, 'Your security settings changed. Reload and try again.');
+      throw e;
+    }
+  }
+  async setSecurity(email, expectedVersion, security) {
+    const profile = await this.userByEmail(email);
+    if (!profile || (profile.security?.version || 0) !== expectedVersion)
+      throw storageError(409, 'Your security settings changed. Reload and try again.');
+    await this.putProfile(
+      { ...profile, security: { ...security, version: expectedVersion + 1 } },
+      { field: 'password', value: profile.password },
+    );
+  }
+  async revokeSessions(user) {
+    const profile = await this.userByEmail(user.email);
+    if (!profile) return;
+    const version = profile.credentialVersion || 0;
+    await this.doc.send(
+      new UpdateCommand({
+        TableName: this.table,
+        Key: { pk: `ACCOUNT#${user.email}`, sk: 'PROFILE' },
+        UpdateExpression: 'SET credentialVersion = :next',
+        ConditionExpression: 'attribute_not_exists(credentialVersion) OR credentialVersion = :v',
+        ExpressionAttributeValues: { ':next': version + 1, ':v': version },
+      }),
+    );
+  }
+  async deleteItems(items) {
+    for (let i = 0; i < items.length; i += 25)
+      await Promise.all(
+        items.slice(i, i + 25).map((item) =>
+          this.doc.send(
+            new DeleteCommand({ TableName: this.table, Key: { pk: item.pk, sk: item.sk } }),
+          ),
+        ),
+      );
+  }
+  async deleteAccount(user) {
+    await this.revokeSessions(user);
+    const pk = workspace(user.id);
+    const items = await this.query(pk);
+    const links = [];
+    for (const item of items) {
+      if (item.sk.startsWith('INVITE#')) links.push({ pk: item.sk, sk: 'LINK' });
+      if (item.sk.startsWith('PAGE#')) links.push({ pk: `PAGE#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('BOOKINGTOKEN#')) links.push({ pk: `BOOKING#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('MEMBER#'))
+        links.push({ pk: `USER#${item.user_id}`, sk: `MEMBERSHIP#${user.id}` });
+      if (item.sk.startsWith('SHARE#') && item.hash) links.push({ pk: `SHARE#${item.hash}`, sk: 'LINK' });
+      if (item.sk.startsWith('RECORD#')) {
+        links.push({ pk: 'MONITORS', sk: `${user.id}#${item.id}` });
+        links.push({ pk: 'INVOICE_REMINDERS', sk: `${user.id}#${item.id}` });
+      }
+    }
+    for (const m of await this.query(`USER#${user.id}`, 'MEMBERSHIP#')) {
+      links.push(m);
+      links.push({ pk: workspace(m.workspace_id), sk: `MEMBER#${user.id}` });
+    }
+    await this.deleteItems([...links, ...items.filter((i) => i.sk !== 'META')]);
+    await this.deleteItems([{ pk, sk: 'META' }, { pk: `ACCOUNT#${user.email}`, sk: 'PROFILE' }]);
+  }
+  async createInvite(workspaceId, invite) {
+    const existing = (await this.query(workspace(workspaceId), 'INVITE#')).filter(
+      (i) => i.expires > Date.now(),
+    );
+    const replaced = existing.filter((i) => i.email === invite.email);
+    if (existing.length - replaced.length >= 25)
+      throw storageError(400, 'Revoke an old invitation before adding another.');
+    await this.deleteItems(replaced.flatMap((i) => [i, { pk: i.sk, sk: 'LINK' }]));
+    const ttl = Math.floor(invite.expires / 1000) + 86400;
+    const item = { ...invite, workspace_id: workspaceId, ttl };
+    await this.doc.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `INVITE#${invite.hash}`, ...item } } },
+          { Put: { TableName: this.table, Item: { pk: `INVITE#${invite.hash}`, sk: 'LINK', ...item } } },
+        ],
+      }),
+    );
+  }
+  async invites(workspaceId) {
+    return (await this.query(workspace(workspaceId), 'INVITE#'))
+      .filter((i) => i.expires > Date.now())
+      .map(omitKeys);
+  }
+  async getInvite(hash) {
+    const item = await this.get(`INVITE#${hash}`, 'LINK');
+    return item && item.expires > Date.now() ? omitKeys(item) : null;
+  }
+  async revokeInvite(workspaceId, hash) {
+    const item = await this.get(`INVITE#${hash}`, 'LINK');
+    if (!item || item.workspace_id !== workspaceId) return;
+    await this.deleteItems([
+      { pk: `INVITE#${hash}`, sk: 'LINK' },
+      { pk: workspace(workspaceId), sk: `INVITE#${hash}` },
+    ]);
+  }
+  async acceptInvite(hash, member) {
+    const invite = await this.getInvite(hash);
+    if (!invite) throw storageError(410, 'This invitation has expired or was revoked.');
+    if ((await this.query(workspace(invite.workspace_id), 'MEMBER#')).length >= 25)
+      throw storageError(400, 'This workspace has reached its 25-member limit.');
+    const payload = { ...member, workspace_id: invite.workspace_id, role: invite.role, workspaceName: invite.workspaceName };
+    try {
+      await this.doc.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Delete: {
+                TableName: this.table,
+                Key: { pk: `INVITE#${hash}`, sk: 'LINK' },
+                ConditionExpression: 'attribute_exists(pk)',
+              },
+            },
+            { Delete: { TableName: this.table, Key: { pk: workspace(invite.workspace_id), sk: `INVITE#${hash}` } } },
+            { Put: { TableName: this.table, Item: { pk: workspace(invite.workspace_id), sk: `MEMBER#${member.user_id}`, ...payload } } },
+            { Put: { TableName: this.table, Item: { pk: `USER#${member.user_id}`, sk: `MEMBERSHIP#${invite.workspace_id}`, ...payload } } },
+          ],
+        }),
+      );
+    } catch (e) {
+      if (collision(e)) throw storageError(410, 'This invitation has expired or was revoked.');
+      throw e;
+    }
+    return payload;
+  }
+  async members(workspaceId) {
+    return (await this.query(workspace(workspaceId), 'MEMBER#')).map(omitKeys);
+  }
+  async membership(workspaceId, userId) {
+    return omitKeys(await this.get(workspace(workspaceId), `MEMBER#${userId}`));
+  }
+  async memberships(userId) {
+    return (await this.query(`USER#${userId}`, 'MEMBERSHIP#')).map(omitKeys);
+  }
+  async setMemberRole(workspaceId, userId, role) {
+    const current = await this.membership(workspaceId, userId);
+    if (!current) throw storageError(404, 'This member is no longer in the workspace.');
+    const payload = { ...current, role };
+    await this.doc.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `MEMBER#${userId}`, ...payload } } },
+          { Put: { TableName: this.table, Item: { pk: `USER#${userId}`, sk: `MEMBERSHIP#${workspaceId}`, ...payload } } },
+        ],
+      }),
+    );
+  }
+  async removeMember(workspaceId, userId) {
+    await this.deleteItems([
+      { pk: workspace(workspaceId), sk: `MEMBER#${userId}` },
+      { pk: `USER#${userId}`, sk: `MEMBERSHIP#${workspaceId}` },
+    ]);
+  }
+  async getSetting(workspaceId, key) {
+    return (await this.get(workspace(workspaceId), `SETTING#${key}`))?.value ?? null;
+  }
+  async putSetting(workspaceId, key, value) {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { pk: workspace(workspaceId), sk: `SETTING#${key}`, value },
+      }),
+    );
+  }
+  async pages(workspaceId) {
+    return (await this.query(workspace(workspaceId), 'PAGE#')).map(omitKeys);
+  }
+  async createPage(workspaceId, page) {
+    const previous = await this.get(workspace(workspaceId), `PAGE#${page.kind}`);
+    const item = { ...page, workspace_id: workspaceId };
+    await this.doc.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          ...(previous ? [{ Delete: { TableName: this.table, Key: { pk: `PAGE#${previous.hash}`, sk: 'LINK' } } }] : []),
+          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `PAGE#${page.kind}`, ...item } } },
+          { Put: { TableName: this.table, Item: { pk: `PAGE#${page.hash}`, sk: 'LINK', ...item } } },
+        ],
+      }),
+    );
+  }
+  async deletePage(workspaceId, kind) {
+    const previous = await this.get(workspace(workspaceId), `PAGE#${kind}`);
+    if (!previous) return;
+    await this.deleteItems([previous, { pk: `PAGE#${previous.hash}`, sk: 'LINK' }]);
+  }
+  async pageByHash(hash) {
+    return omitKeys(await this.get(`PAGE#${hash}`, 'LINK'));
+  }
+  async createBookingToken(workspaceId, recordId, hash) {
+    const previous = await this.get(workspace(workspaceId), `BOOKINGTOKEN#${recordId}`);
+    if (previous) await this.deleteItems([{ pk: `BOOKING#${previous.hash}`, sk: 'LINK' }]);
+    const item = { hash, workspace_id: workspaceId, record_id: recordId };
+    await this.doc.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: this.table, Item: { pk: workspace(workspaceId), sk: `BOOKINGTOKEN#${recordId}`, ...item } } },
+          { Put: { TableName: this.table, Item: { pk: `BOOKING#${hash}`, sk: 'LINK', ...item } } },
+        ],
+      }),
+    );
+  }
+  async bookingToken(hash) {
+    return omitKeys(await this.get(`BOOKING#${hash}`, 'LINK'));
+  }
+  async deleteBookingToken(hash) {
+    const item = await this.bookingToken(hash);
+    if (!item) return;
+    await this.deleteItems([
+      { pk: `BOOKING#${hash}`, sk: 'LINK' },
+      { pk: workspace(item.workspace_id), sk: `BOOKINGTOKEN#${item.record_id}` },
+    ]);
   }
   async state(userId) {
     const [{ records }, checks] = await Promise.all([

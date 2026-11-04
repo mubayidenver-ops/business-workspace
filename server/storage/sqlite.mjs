@@ -19,18 +19,191 @@ CREATE TABLE IF NOT EXISTS shares(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,re
 CREATE TABLE IF NOT EXISTS payments(reference TEXT PRIMARY KEY,user_id TEXT NOT NULL,version INTEGER NOT NULL,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS invoice_reminders(user_id TEXT NOT NULL, key TEXT NOT NULL, claimed INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS quote_revisions(user_id TEXT NOT NULL, record_id TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(user_id,record_id,version));
+CREATE TABLE IF NOT EXISTS public_votes(record_id TEXT NOT NULL, voter TEXT NOT NULL, PRIMARY KEY(record_id,voter));
+CREATE TABLE IF NOT EXISTS invites(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS members(workspace_id TEXT NOT NULL, user_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(workspace_id,user_id));
+CREATE TABLE IF NOT EXISTS settings(workspace_id TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(workspace_id,key));
+CREATE TABLE IF NOT EXISTS pages(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(workspace_id,kind));
+CREATE TABLE IF NOT EXISTS booking_tokens(hash TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, record_id TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
+    if (!this.db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'security'))
+      this.db.exec('ALTER TABLE users ADD COLUMN security TEXT');
+  }
+  transaction(work) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = work();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+  async setSecurity(email, expectedVersion, security) {
+    const changed = this.db
+      .prepare(
+        "UPDATE users SET security=? WHERE email=? AND COALESCE(json_extract(security,'$.version'),0)=?",
+      )
+      .run(JSON.stringify({ ...security, version: expectedVersion + 1 }), email, expectedVersion);
+    if (!changed.changes)
+      throw storageError(409, 'Your security settings changed. Reload and try again.');
+  }
+  async revokeSessions(user) {
+    this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
+  }
+  async deleteAccount(user) {
+    this.transaction(() => {
+      const id = user.id;
+      const recordIds = 'SELECT id FROM records WHERE user_id=?';
+      this.db.prepare(`DELETE FROM votes WHERE record_id IN (${recordIds}) OR user_id=?`).run(id, id);
+      this.db.prepare(`DELETE FROM public_votes WHERE record_id IN (${recordIds})`).run(id);
+      for (const table of ['checks', 'requests', 'invoice_reminders', 'quote_revisions'])
+        this.db.prepare(`DELETE FROM ${table} WHERE user_id=?`).run(id);
+      this.db.prepare('DELETE FROM shares WHERE user_id=?').run(id);
+      for (const table of ['invites', 'settings', 'pages', 'booking_tokens'])
+        this.db.prepare(`DELETE FROM ${table} WHERE workspace_id=?`).run(id);
+      this.db.prepare('DELETE FROM members WHERE workspace_id=? OR user_id=?').run(id, id);
+      this.db.prepare('DELETE FROM records WHERE user_id=?').run(id);
+      this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);
+      this.db.prepare('DELETE FROM users WHERE id=?').run(id);
+    });
+  }
+  async createInvite(workspaceId, invite) {
+    this.transaction(() => {
+      this.db
+        .prepare("DELETE FROM invites WHERE workspace_id=? AND json_extract(payload,'$.email')=?")
+        .run(workspaceId, invite.email);
+      if (this.db.prepare('SELECT COUNT(*) n FROM invites WHERE workspace_id=?').get(workspaceId).n >= 25)
+        throw storageError(400, 'Revoke an old invitation before adding another.');
+      this.db
+        .prepare('INSERT INTO invites VALUES(?,?,?)')
+        .run(invite.hash, workspaceId, JSON.stringify(invite));
+    });
+  }
+  async invites(workspaceId) {
+    return this.db
+      .prepare('SELECT payload FROM invites WHERE workspace_id=?')
+      .all(workspaceId)
+      .map((r) => JSON.parse(r.payload))
+      .filter((i) => i.expires > Date.now());
+  }
+  async getInvite(hash) {
+    const row = this.db.prepare('SELECT payload FROM invites WHERE hash=?').get(hash);
+    const invite = row ? JSON.parse(row.payload) : null;
+    return invite && invite.expires > Date.now() ? invite : null;
+  }
+  async revokeInvite(workspaceId, hash) {
+    this.db.prepare('DELETE FROM invites WHERE workspace_id=? AND hash=?').run(workspaceId, hash);
+  }
+  async acceptInvite(hash, member) {
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT payload FROM invites WHERE hash=?').get(hash);
+      const invite = row ? JSON.parse(row.payload) : null;
+      if (!invite || invite.expires <= Date.now())
+        throw storageError(410, 'This invitation has expired or was revoked.');
+      if (this.db.prepare('SELECT COUNT(*) n FROM members WHERE workspace_id=?').get(invite.workspace_id).n >= 25)
+        throw storageError(400, 'This workspace has reached its 25-member limit.');
+      const payload = { ...member, workspace_id: invite.workspace_id, role: invite.role, workspaceName: invite.workspaceName };
+      this.db
+        .prepare('INSERT OR REPLACE INTO members VALUES(?,?,?)')
+        .run(invite.workspace_id, member.user_id, JSON.stringify(payload));
+      this.db.prepare('DELETE FROM invites WHERE hash=?').run(hash);
+      return payload;
+    });
+  }
+  async members(workspaceId) {
+    return this.db
+      .prepare('SELECT payload FROM members WHERE workspace_id=?')
+      .all(workspaceId)
+      .map((r) => JSON.parse(r.payload));
+  }
+  async membership(workspaceId, userId) {
+    const row = this.db
+      .prepare('SELECT payload FROM members WHERE workspace_id=? AND user_id=?')
+      .get(workspaceId, userId);
+    return row ? JSON.parse(row.payload) : null;
+  }
+  async memberships(userId) {
+    return this.db
+      .prepare('SELECT payload FROM members WHERE user_id=?')
+      .all(userId)
+      .map((r) => JSON.parse(r.payload));
+  }
+  async setMemberRole(workspaceId, userId, role) {
+    const current = await this.membership(workspaceId, userId);
+    if (!current) throw storageError(404, 'This member is no longer in the workspace.');
+    this.db
+      .prepare('UPDATE members SET payload=? WHERE workspace_id=? AND user_id=?')
+      .run(JSON.stringify({ ...current, role }), workspaceId, userId);
+  }
+  async removeMember(workspaceId, userId) {
+    this.db.prepare('DELETE FROM members WHERE workspace_id=? AND user_id=?').run(workspaceId, userId);
+  }
+  async getSetting(workspaceId, key) {
+    const row = this.db
+      .prepare('SELECT payload FROM settings WHERE workspace_id=? AND key=?')
+      .get(workspaceId, key);
+    return row ? JSON.parse(row.payload) : null;
+  }
+  async putSetting(workspaceId, key, value) {
+    this.db
+      .prepare('INSERT OR REPLACE INTO settings VALUES(?,?,?)')
+      .run(workspaceId, key, JSON.stringify(value));
+  }
+  async pages(workspaceId) {
+    return this.db
+      .prepare('SELECT payload FROM pages WHERE workspace_id=?')
+      .all(workspaceId)
+      .map((r) => JSON.parse(r.payload));
+  }
+  async createPage(workspaceId, page) {
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM pages WHERE workspace_id=? AND kind=?').run(workspaceId, page.kind);
+      this.db
+        .prepare('INSERT INTO pages VALUES(?,?,?,?)')
+        .run(page.hash, workspaceId, page.kind, JSON.stringify(page));
+    });
+  }
+  async deletePage(workspaceId, kind) {
+    this.db.prepare('DELETE FROM pages WHERE workspace_id=? AND kind=?').run(workspaceId, kind);
+  }
+  async pageByHash(hash) {
+    const row = this.db.prepare('SELECT payload FROM pages WHERE hash=?').get(hash);
+    return row ? JSON.parse(row.payload) : null;
+  }
+  async publicVote(workspaceId, recordId, voter) {
+    const record = this.db
+      .prepare("SELECT id FROM records WHERE id=? AND user_id=? AND module='feedback'")
+      .get(recordId, workspaceId);
+    if (!record) throw storageError(404, 'This request is no longer on the board.');
+    return (
+      this.db.prepare('INSERT OR IGNORE INTO public_votes VALUES(?,?)').run(recordId, voter)
+        .changes === 1
+    );
+  }
+  async createBookingToken(workspaceId, recordId, hash) {
+    this.db.prepare('DELETE FROM booking_tokens WHERE workspace_id=? AND record_id=?').run(workspaceId, recordId);
+    this.db.prepare('INSERT INTO booking_tokens VALUES(?,?,?)').run(hash, workspaceId, recordId);
+  }
+  async bookingToken(hash) {
+    return this.db.prepare('SELECT * FROM booking_tokens WHERE hash=?').get(hash) || null;
+  }
+  async deleteBookingToken(hash) {
+    this.db.prepare('DELETE FROM booking_tokens WHERE hash=?').run(hash);
   }
   async health() {
     this.db.prepare('SELECT 1').get();
   }
   async userByEmail(email) {
-    return this.db.prepare('SELECT * FROM users WHERE email=?').get(email);
+    const user = this.db.prepare('SELECT * FROM users WHERE email=?').get(email);
+    if (!user) return user;
+    return { ...user, security: user.security ? JSON.parse(user.security) : { version: 0 } };
   }
   async createUser(user) {
     try {
       this.db
-        .prepare('INSERT INTO users VALUES(?,?,?,?)')
+        .prepare('INSERT INTO users(id,email,name,password) VALUES(?,?,?,?)')
         .run(user.id, user.email, user.name, user.password);
     } catch (e) {
       if (e.message.includes('UNIQUE'))
@@ -79,7 +252,9 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       .map((r) => ({
         ...r,
         archived: !!r.archived,
-        votes: this.db.prepare('SELECT COUNT(*) AS n FROM votes WHERE record_id=?').get(r.id).n,
+        votes:
+          this.db.prepare('SELECT COUNT(*) AS n FROM votes WHERE record_id=?').get(r.id).n +
+          this.db.prepare('SELECT COUNT(*) AS n FROM public_votes WHERE record_id=?').get(r.id).n,
       }));
   }
   async getRecord(userId, id) {
@@ -150,8 +325,8 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       throw e;
     }
   }
-  async vote(userId, id) {
-    this.db.prepare('INSERT OR IGNORE INTO votes VALUES(?,?)').run(id, userId);
+  async vote(workspaceId, id, voterId = workspaceId) {
+    this.db.prepare('INSERT OR IGNORE INTO votes VALUES(?,?)').run(id, voterId);
   }
   async latestCheck(userId, id) {
     const c = this.db

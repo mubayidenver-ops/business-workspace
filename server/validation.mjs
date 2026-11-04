@@ -1,6 +1,8 @@
 import { validateAttachment } from './attachments.mjs';
 import { byId, statuses } from '../shared/tools.mjs';
 import { calculateDocument } from '../shared/pricing.mjs';
+import { parseTimeEntries } from '../shared/projects.mjs';
+import { parseWorkOrders, parseServiceLog } from '../shared/equipment.mjs';
 export function validateRecord(module, input) {
   const tool = Object.hasOwn(byId, module) ? byId[module] : null;
   if (!tool) throw new Error('Unknown tool.');
@@ -80,6 +82,18 @@ export function validateRecord(module, input) {
       throw new Error('Choose a valid date and time.');
     data[field.key] = value;
   }
+  const structured = {
+    projects: { timeEntries: parseTimeEntries },
+    equipment: { workOrders: parseWorkOrders, serviceLog: parseServiceLog },
+  }[module];
+  for (const [key, parse] of Object.entries(structured || {}))
+    if (input.data?.[key] !== undefined) data[key] = JSON.stringify(parse(input.data[key]));
+  if (
+    module === 'equipment' &&
+    data.serviceIntervalDays &&
+    (!/^\d+$/.test(data.serviceIntervalDays) || Number(data.serviceIntervalDays) > 3650)
+  )
+    throw new Error('Choose a whole service interval from 0 to 3650 days.');
   if (
     module === 'uptime' &&
     data.intervalMinutes &&

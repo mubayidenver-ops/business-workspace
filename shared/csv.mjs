@@ -59,7 +59,9 @@ export function writeCSV(rows, delimiter = ',') {
     .join('\r\n');
 }
 export function cleanCSV(text, delimiter = ',') {
-  const rows = parseCSV(text, delimiter);
+  return cleanRows(parseCSV(text, delimiter));
+}
+export function cleanRows(rows) {
   if (!rows.length) throw new Error('Add a header and at least one row.');
   const header = rows[0].map((c) => c.trim());
   if (header.some((c) => !c)) throw new Error('Every column needs a header.');

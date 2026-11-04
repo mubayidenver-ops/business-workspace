@@ -17,6 +17,8 @@ import {
   collectionModules,
 } from './public-sharing.mjs';
 import { Billing } from './billing.mjs';
+import { createFeatures, clearSession } from './features.mjs';
+import { completeService } from '../shared/equipment.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const store = await createStore(root);
@@ -59,12 +61,13 @@ function rate(key, max = 20) {
   if (++v.n > max) throw fail(429, 'Too many attempts. Try again in 15 minutes.');
 }
 const sessionHash = (t) => createHash('sha256').update(t).digest('hex');
+const features = createFeatures({ store, billing, fail, body, json, rate, sessionHash });
 async function userFor(req) {
   const token = /\bbw_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
   return token ? store.sessionUser(sessionHash(token)) : null;
 }
-async function own(user, id) {
-  const r = await store.getRecord(user.id, id);
+async function own(ws, id) {
+  const r = await store.getRecord(ws.id, id);
   if (!r) throw fail(404, 'This record is not available.');
   return r;
 }
@@ -217,6 +220,16 @@ const server = createServer(async (req, res) => {
         const actual = scryptSync(password, salt, 64);
         if (!u || !timingSafeEqual(actual, Buffer.from(u.password.split(':')[1], 'hex')))
           throw fail(401, 'Email or password is incorrect.');
+        if (u.security?.totp) {
+          if (!b.code)
+            throw Object.assign(fail(401, 'Enter the code from your authenticator app.'), {
+              extra: { twoFactorRequired: true },
+            });
+          if (!(await features.secondFactor(u, String(b.code))))
+            throw Object.assign(fail(401, 'That code is incorrect or was already used.'), {
+              extra: { twoFactorRequired: true },
+            });
+        }
       }
       const token = randomBytes(32).toString('hex');
       await store.createSession(sessionHash(token), u, Date.now() + 7 * 86400000);
@@ -230,6 +243,7 @@ const server = createServer(async (req, res) => {
       );
       return;
     }
+    if (await features.publicRoute(req, res, url)) return;
     if (url.pathname === '/api/public') {
       const token = req.headers['x-workspace-share'];
       if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token))
@@ -286,13 +300,21 @@ const server = createServer(async (req, res) => {
                 ? 'Completed'
                 : 'In review',
         });
-        json(res, 200, { received: true, action: response.action });
+        json(res, 200, {
+          received: true,
+          action: response.action,
+          ...(response.action === 'book'
+            ? { manageToken: await features.createManageToken(share.user_id, record.id) }
+            : {}),
+        });
         return;
       }
       throw fail(405, 'This action is not available.');
     }
     const user = await userFor(req);
     if (!user) throw fail(401, 'Sign in to open your workspace.');
+    const ws = await features.workspaceFor(req, user);
+    if (await features.privateRoute(req, res, url, user, ws)) return;
     if (url.pathname === '/api/password' && req.method === 'POST') {
       rate('password:' + user.id, 10);
       const b = await body(req);
@@ -324,14 +346,15 @@ const server = createServer(async (req, res) => {
         res,
         200,
         { ok: true },
-        { 'Set-Cookie': 'bw_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' },
+        { 'Set-Cookie': clearSession },
       );
       return;
     }
     if (url.pathname === '/api/state' && req.method === 'GET') {
-      const state = await store.state(user.id);
+      const state = await store.state(ws.id);
       json(res, 200, {
         user,
+        workspace: ws,
         records: state.records.map(toRecord),
         checks: state.checks,
         storage:
@@ -340,16 +363,18 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === '/api/billing' && req.method === 'GET') {
-      json(res, 200, await billing.summary(user.id));
+      json(res, 200, await billing.summary(ws.id));
       return;
     }
     if (url.pathname === '/api/billing/checkout' && req.method === 'POST') {
+      features.requireRole(ws, 'owner');
       rate('billing:' + user.id, 10);
       json(res, 200, await billing.checkout(user, await body(req)));
       return;
     }
     const paymentMatch = /^\/api\/billing\/([A-Za-z0-9]{32})\/(check|resume)$/.exec(url.pathname);
     if (paymentMatch && req.method === 'POST') {
+      features.requireRole(ws, 'owner');
       rate('billing-check:' + user.id, 30);
       if (paymentMatch[2] === 'check')
         json(res, 200, await billing.reconcile(paymentMatch[1], user.id));
@@ -383,23 +408,23 @@ const server = createServer(async (req, res) => {
       const requestHash = createHash('sha256')
         .update(JSON.stringify({ module: b.module, ...record }))
         .digest('hex');
-      const saved = await store.createRecord(user.id, b.module, record, requestKey, requestHash);
+      const saved = await store.createRecord(ws.id, b.module, record, requestKey, requestHash);
       json(res, saved.replayed ? 200 : 201, toRecord(saved.record));
       return;
     }
-    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions))?$/.exec(
+    const match = /^\/api\/records\/([\w-]+)(?:\/(check|vote|share|convert|revisions|service))?$/.exec(
       url.pathname,
     );
     if (match) {
-      const r = await own(user, match[1]);
+      const r = await own(ws, match[1]);
       if (match[2] === 'revisions' && req.method === 'GET') {
         if (r.module !== 'proposals') throw fail(404, 'Quote history is unavailable.');
-        json(res, 200, (await store.quoteRevisions(user.id, r.id)).map(toRecord));
+        json(res, 200, (await store.quoteRevisions(ws.id, r.id)).map(toRecord));
         return;
       }
       if (match[2] === 'share') {
         if (req.method === 'GET') {
-          const share = await store.shareForRecord(user.id, r.id);
+          const share = await store.shareForRecord(ws.id, r.id);
           json(res, 200, {
             active:
               !!share &&
@@ -411,7 +436,8 @@ const server = createServer(async (req, res) => {
           return;
         }
         if (req.method === 'POST') {
-          await billing.requirePro(user.id);
+          features.requireRole(ws, 'admin');
+          await billing.requirePro(ws.id);
           const b = await body(req);
           assertShareable(r);
           if (b.confirmed !== true)
@@ -431,7 +457,7 @@ const server = createServer(async (req, res) => {
             )
               throw fail(400, 'Choose up to 12 additional records of the same type.');
             const entries = await Promise.all(
-              b.collection.map((id) => store.getRecord(user.id, id)),
+              b.collection.map((id) => store.getRecord(ws.id, id)),
             );
             if (
               entries.some(
@@ -456,11 +482,11 @@ const server = createServer(async (req, res) => {
           );
           if (expires <= Date.now())
             throw fail(400, 'This quote has expired. Update its expiry date before sharing.');
-          await store.createShare(user.id, r.id, r.version, {
+          await store.createShare(ws.id, r.id, r.version, {
             hash: sessionHash(token),
-            user_id: user.id,
+            user_id: ws.id,
             record_id: r.id,
-            brand: user.name,
+            brand: ws.name,
             recordVersion: r.version,
             ...(collection?.length ? { collection } : {}),
             expires,
@@ -469,13 +495,14 @@ const server = createServer(async (req, res) => {
           return;
         }
         if (req.method === 'DELETE') {
-          await store.revokeShare(user.id, r.id);
+          features.requireRole(ws, 'admin');
+          await store.revokeShare(ws.id, r.id);
           json(res, 200, { revoked: true });
           return;
         }
       }
       if (match[2] === 'convert' && req.method === 'POST') {
-        await billing.requirePro(user.id);
+        await billing.requirePro(ws.id);
         if (r.module !== 'proposals') throw fail(400, 'Only proposals can become invoice drafts.');
         const b = await body(req);
         if (b.version !== r.version) throw fail(409, 'This proposal changed. Refresh it first.');
@@ -495,7 +522,7 @@ const server = createServer(async (req, res) => {
             ? b.requestKey
             : null;
         const saved = await store.createRecord(
-          user.id,
+          ws.id,
           'invoices',
           record,
           key,
@@ -507,14 +534,34 @@ const server = createServer(async (req, res) => {
       if (match[2] === 'check' && req.method === 'POST') {
         if (!['uptime', 'links', 'changes', 'expiry'].includes(r.module))
           throw fail(400, 'This tool does not run website checks.');
-        rate('checks:' + user.id, 30);
+        rate('checks:' + ws.id, 30);
         json(res, 200, await check(r));
         return;
       }
       if (match[2] === 'vote' && req.method === 'POST') {
         if (r.module !== 'feedback') throw fail(400, 'Only feedback can receive votes.');
-        await store.vote(user.id, r.id);
+        await store.vote(ws.id, r.id, user.id);
         json(res, 200, { ok: true });
+        return;
+      }
+      if (match[2] === 'service' && req.method === 'POST') {
+        if (r.module !== 'equipment') throw fail(400, 'Only equipment can log a service.');
+        const b = await body(req);
+        if (b.version !== r.version) throw fail(409, 'This asset changed. Reopen it first.');
+        let record;
+        try {
+          record = validateRecord('equipment', {
+            title: r.title,
+            status: r.status,
+            data: completeService(JSON.parse(r.data), b),
+          });
+        } catch (e) {
+          throw fail(400, e.message);
+        }
+        const updated = await store.updateRecord(ws.id, r.id, b.version, {
+          data: JSON.stringify(record.data),
+        });
+        json(res, 200, toRecord(updated));
         return;
       }
       if (req.method === 'PATCH' && !match[2]) {
@@ -526,6 +573,7 @@ const server = createServer(async (req, res) => {
           );
         let patch;
         if (b.title === undefined && typeof b.archived === 'boolean') {
+          features.requireRole(ws, 'admin');
           patch = { archived: b.archived };
         } else {
           let record;
@@ -536,9 +584,12 @@ const server = createServer(async (req, res) => {
           }
           const existing = JSON.parse(r.data);
           if (existing.clientResponse) record.data.clientResponse = existing.clientResponse;
+          for (const key of ['timeEntries', 'workOrders', 'serviceLog'])
+            if (existing[key] !== undefined && b.data?.[key] === undefined)
+              record.data[key] = existing[key];
           patch = { title: record.title, status: record.status, data: JSON.stringify(record.data) };
         }
-        const updated = await store.updateRecord(user.id, r.id, b.version, patch);
+        const updated = await store.updateRecord(ws.id, r.id, b.version, patch);
         json(res, 200, toRecord(updated));
         return;
       }
@@ -548,6 +599,7 @@ const server = createServer(async (req, res) => {
     if (!res.headersSent)
       json(res, e.status || 500, {
         error: e.status ? e.message : 'Something went wrong. Please try again.',
+        ...(e.status && e.extra ? e.extra : {}),
       });
   }
 });
