@@ -536,6 +536,25 @@ export class DynamoStore {
       }
     }
   }
+  async saveJobRun(name, run) {
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: {
+          pk: 'JOB_RUNS#' + name,
+          sk: run.finishedAt + '#' + randomUUID(),
+          ...run,
+          ttl: Math.floor(Date.now() / 1000) + 7 * 86400,
+        },
+      }),
+    );
+  }
+  async jobRuns(name) {
+    const now = Math.floor(Date.now() / 1000);
+    return (await this.query('JOB_RUNS#' + name, '', { limit: 20, descending: true }))
+      .filter((run) => run.ttl > now)
+      .map(omitKeys);
+  }
   async invoiceReminders() {
     return (await this.query('INVOICE_REMINDERS', '')).map(omitKeys);
   }

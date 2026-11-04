@@ -25,8 +25,9 @@ export function reminderConfig(env = process.env) {
 }
 
 export async function sendInvoiceReminders(store, config, send = fetch, now = Date.now()) {
-  if (!config) return;
+  if (!config) return 0;
   let attempts = 0;
+  let failures = 0;
   for (const pointer of await store.invoiceReminders()) {
     if (attempts >= 10) break;
     if (!config.allowed.has(pointer.user_id)) continue;
@@ -89,5 +90,7 @@ export async function sendInvoiceReminders(store, config, send = fetch, now = Da
       }
     }
     await store.finishInvoiceReminder(record.user_id, key, accepted ? 'accepted' : 'uncertain');
+    if (!accepted) failures++;
   }
+  return failures;
 }

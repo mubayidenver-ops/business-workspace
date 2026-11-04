@@ -256,3 +256,28 @@ test('a failed scheduled check does not suppress later monitors', async () => {
   assert.equal(count, 1);
   assert.deepEqual(checked, ['failed', 'later']);
 });
+
+test('standalone jobs record completed cycles and stop cleanly', async (t) => {
+  const { startJobs } = await import('../server/scheduled-jobs.mjs');
+  let finish;
+  const recorded = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const checked = [];
+  const store = {
+    cleanup: async () => {},
+    monitors: async () => [{ id: 'example', user_id: 'owner', module: 'uptime', data: '{}' }],
+    latestCheck: async () => null,
+    saveJobRun: async (name, run) => finish({ name, run }),
+  };
+  const worker = startJobs(store, async (record) => checked.push(record.id), {
+    mail: null,
+    unref: false,
+  });
+  t.after(() => worker.stop());
+  const { name, run } = await recorded;
+  assert.equal(name, 'monitors');
+  assert.equal(run.failures, 0);
+  assert.ok(Date.parse(run.finishedAt) >= Date.parse(run.startedAt));
+  assert.deepEqual(checked, ['example']);
+});

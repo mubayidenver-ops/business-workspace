@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS votes(record_id TEXT NOT NULL REFERENCES records(id),
 CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL REFERENCES users(id),key TEXT NOT NULL,hash TEXT NOT NULL,record_id TEXT NOT NULL REFERENCES records(id),PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS shares(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,record_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS payments(reference TEXT PRIMARY KEY,user_id TEXT NOT NULL,version INTEGER NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS job_runs(id TEXT PRIMARY KEY, name TEXT NOT NULL, finished TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS job_runs_name ON job_runs(name,finished DESC);
 CREATE TABLE IF NOT EXISTS invoice_reminders(user_id TEXT NOT NULL, key TEXT NOT NULL, claimed INTEGER NOT NULL, status TEXT NOT NULL, PRIMARY KEY(user_id,key));
 CREATE TABLE IF NOT EXISTS quote_revisions(user_id TEXT NOT NULL, record_id TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(user_id,record_id,version));
 CREATE TABLE IF NOT EXISTS memberships(owner_id TEXT NOT NULL, member_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(owner_id,member_id));
@@ -351,6 +353,22 @@ CREATE INDEX IF NOT EXISTS records_owner ON records(user_id,module);`);
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+  async saveJobRun(name, run) {
+    this.db
+      .prepare('INSERT INTO job_runs VALUES (?,?,?,?)')
+      .run(randomUUID(), name, run.finishedAt, JSON.stringify(run));
+    this.db
+      .prepare(
+        'DELETE FROM job_runs WHERE name=? AND id NOT IN (SELECT id FROM job_runs WHERE name=? ORDER BY finished DESC LIMIT 20)',
+      )
+      .run(name, name);
+  }
+  async jobRuns(name) {
+    return this.db
+      .prepare('SELECT payload FROM job_runs WHERE name=? ORDER BY finished DESC LIMIT 20')
+      .all(name)
+      .map((row) => JSON.parse(row.payload));
   }
   async invoiceReminders() {
     return this.db

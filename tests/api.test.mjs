@@ -924,3 +924,15 @@ test('owner imports are atomic, repeatable and safe draft copies', async () => {
   assert.equal(copies.find((r) => r.module === 'invoices').data.emailReminder, false);
   assert.equal(copies.find((r) => r.module === 'projects').data.clientResponse, undefined);
 });
+
+test('connections report requires sign-in and exposes only readiness data', async () => {
+  assert.equal((await req('/connections')).status, 401);
+  const result = await req('/connections', 'GET', undefined, cookieA);
+  assert.equal(result.status, 200);
+  assert.equal(result.data.billing, 'disabled');
+  assert.equal(typeof result.data.ai, 'boolean');
+  assert.equal(typeof result.data.email, 'boolean');
+  assert.equal(result.data.monitors[0].name, 'monitors');
+  assert.ok(['waiting', 'ready', 'errors', 'delayed'].includes(result.data.monitors[0].status));
+  assert.deepEqual(Object.keys(result.data).sort(), ['ai', 'billing', 'email', 'monitors']);
+});

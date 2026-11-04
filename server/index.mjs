@@ -1,3 +1,6 @@
+import { createCheckRunner } from './check-runner.mjs';
+import { jobDefinitions, startJobs } from './scheduled-jobs.mjs';
+import { reminderConfig } from './invoice-reminders.mjs';
 import { mfaKey, seal, unseal, base32, matchStep, recoveryHash, verifyMfa } from './mfa.mjs';
 import { createServer } from 'node:http';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
@@ -6,12 +9,7 @@ import { resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './storage/index.mjs';
 import { validateRecord } from './validation.mjs';
-import { safeFetch } from './network.mjs';
-import { runMonitorCycle } from './uptime.mjs';
-import { registrationExpiry } from './rdap.mjs';
 import { aiConfig, draftRecord } from './ai-drafts.mjs';
-import { reminderConfig, sendInvoiceReminders } from './invoice-reminders.mjs';
-import { crawlLinks, comparePage } from './website-checks.mjs';
 import {
   assertShareable,
   publicProjection,
@@ -71,49 +69,7 @@ async function own(user, id) {
   if (!r) throw fail(404, 'This record is not available.');
   return r;
 }
-const checking = new Set();
-async function check(record) {
-  if (checking.has(record.id)) throw fail(409, 'A check is already running.');
-  checking.add(record.id);
-  let result;
-  const d = JSON.parse(record.data);
-  const domainExpiry =
-    record.module === 'expiry' && !d.due ? registrationExpiry(d.registrationDomain) : null;
-  try {
-    const page = await safeFetch(
-      d.url,
-      0,
-      record.module === 'links' ? new URL(d.url).origin : undefined,
-    );
-    result = {
-      status: page.status,
-      ms: page.ms,
-      url: page.url,
-      ok: page.status >= 200 && page.status < 400,
-    };
-    if (record.module === 'changes' && result.ok) {
-      const previous = await store.latestCheck(record.user_id, record.id);
-      Object.assign(result, comparePage(page, d, previous?.result));
-    }
-    if (record.module === 'expiry') {
-      result.certificateExpires = page.certificate;
-    }
-    if (record.module === 'links') result.links = await crawlLinks(page);
-  } catch (e) {
-    result = { ok: false, error: e.message };
-  }
-  try {
-    if (record.module === 'expiry') {
-      const registration = d.due || (await domainExpiry);
-      result.registrationExpires = registration;
-      result.registrationSource = d.due ? 'manual' : registration ? 'rdap' : 'unknown';
-      result.certificateExpires ??= null;
-    }
-    return await store.saveCheck(record, result);
-  } finally {
-    checking.delete(record.id);
-  }
-}
+const check = createCheckRunner(store);
 let vite;
 if (process.argv.includes('--dev') || !existsSync(resolve(root, 'dist/index.html'))) {
   const { createServer: createVite } = await import('vite');
@@ -543,6 +499,35 @@ const server = createServer(async (req, res) => {
       if (!read && !edit) throw fail(403, 'Only the workspace owner can perform this action.');
       user = { id: selected, name: membership.ownerName };
     }
+    if (url.pathname === '/api/connections' && req.method === 'GET') {
+      const email = Boolean(reminderConfig()?.allowed.has(actor.id));
+      const monitors = await Promise.all(
+        jobDefinitions
+          .filter((job) => job.name !== 'reminders' || email)
+          .map(async (job) => {
+            const latest = (await store.jobRuns(job.name))[0];
+            return {
+              name: job.name,
+              label: job.label,
+              finishedAt: latest?.finishedAt || null,
+              status: !latest
+                ? 'waiting'
+                : Date.now() - Date.parse(latest.finishedAt) > job.staleAfter
+                  ? 'delayed'
+                  : latest.failures
+                    ? 'errors'
+                    : 'ready',
+            };
+          }),
+      );
+      json(res, 200, {
+        billing: billing.config.mode,
+        email,
+        ai: Boolean(aiConfig(actor.id)),
+        monitors,
+      });
+      return;
+    }
     if (url.pathname === '/api/state' && req.method === 'GET') {
       const state = await store.state(user.id);
       json(res, 200, {
@@ -923,38 +908,17 @@ const port = Number(process.env.PORT || 3000);
 server.listen(port, process.env.HOST || '127.0.0.1', () =>
   console.log(`Business Workspace: http://localhost:${server.address().port}`),
 );
-let scheduled = false;
-let reminderRunning = false;
-let nextReminderCycle = 0;
-const invoiceMail = reminderConfig();
-const interval = setInterval(async () => {
-  if (invoiceMail && !reminderRunning && Date.now() >= nextReminderCycle) {
-    reminderRunning = true;
-    nextReminderCycle = Date.now() + 15 * 60000;
-    void sendInvoiceReminders(store, invoiceMail)
-      .catch(() => console.error('Invoice reminder processing failed.'))
-      .finally(() => {
-        reminderRunning = false;
-      });
-  }
-  if (scheduled) return;
-  scheduled = true;
-  try {
-    await store.cleanup();
-    for (const [key, value] of rates) if (value.until < Date.now()) rates.delete(key);
-    const failures = await runMonitorCycle(store, check);
-    if (failures)
-      console.error(`${failures} monitor checks failed and will retry on the next cycle.`);
-  } catch (e) {
-    console.error('Scheduled checks will retry on the next cycle.');
-  } finally {
-    scheduled = false;
-  }
+
+const jobs = process.env.JOBS_MODE === 'external' ? null : startJobs(store, check);
+const pruneRates = setInterval(() => {
+  for (const [key, value] of rates) if (value.until < Date.now()) rates.delete(key);
 }, 60000);
-interval.unref();
+pruneRates.unref();
 process.on('SIGTERM', () => {
-  clearInterval(interval);
+  clearInterval(pruneRates);
+  const stopped = jobs?.stop();
   server.close(async () => {
+    await stopped;
     await store.close();
     process.exit(0);
   });

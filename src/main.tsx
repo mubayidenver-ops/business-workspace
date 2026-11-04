@@ -1,3 +1,4 @@
+import { ConnectionsPanel } from './ConnectionsPanel';
 import { ImportPanel } from './ImportPanel';
 import { MfaPanel } from './MfaPanel';
 import React, {
@@ -1516,6 +1517,9 @@ function App() {
       {panel === 'import' && isOwner && (
         <ImportPanel tools={tools} close={() => setPanel('settings')} refresh={refresh} />
       )}
+      {panel === 'connections' && isOwner && (
+        <ConnectionsPanel close={() => setPanel('settings')} />
+      )}
       {panel === 'settings' && (
         <Modal title="Workspace settings" onClose={() => setPanel('')}>
           <div className="modal-body">
@@ -1586,6 +1590,11 @@ function App() {
                 Download backup
               </button>
               {isOwner && (
+                <button onClick={() => setPanel('connections')}>
+                  <Icons.Activity size={16} /> Connections and scheduled work
+                </button>
+              )}
+              {isOwner && (
                 <button onClick={() => setPanel('import')}>
                   <Icons.Upload size={16} /> Import backup records
                 </button>
@@ -1629,24 +1638,20 @@ function App() {
                   <li>SRT caption editing and quiz creation</li>
                   <li>Website checks and change fingerprints</li>
                   <li>Archive, restore, export and in-app due reminders</li>
+                  <li>Workspace team roles and two-step sign-in</li>
+                  <li>Guest booking slots and calendar export</li>
                 </ul>
               </div>
               <div>
-                <h3>Still to connect</h3>
-                <ul>
-                  <li>Paynow merchant activation, provider testing and automatic renewals</li>
-                  <li>Automatic transcription, translation and AI</li>
-                  <li>Video rendering and private uploads</li>
-                  <li>Full client portals, storefront checkout and public booking calendars</li>
-                  <li>Email, SMS and calendar integration</li>
-                  <li>Team access, email account recovery and private file storage</li>
-                </ul>
+                <h3>Connections</h3>
+                <p>
+                  Check provider configuration and the latest scheduled runs in workspace settings.
+                </p>
+                {isOwner && (
+                  <button onClick={() => setPanel('connections')}>View connections</button>
+                )}
               </div>
             </div>
-            <p className="notice">
-              Payment collection remains disabled until merchant activation and provider testing are
-              complete. Automatic renewals are not included.
-            </p>
           </div>
         </Modal>
       )}
